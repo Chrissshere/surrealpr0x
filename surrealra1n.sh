@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 21"
+CURRENT_VERSION="v2.0 beta 22"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -21,7 +21,6 @@ restorefiles_remake=""
 VERSION=""
 BUILD=""
 VERSION_LATEST=""
-outdated=""
 IOS164_BUILD_DEVICE=""
 IOS164_IMG4=""
 IOS164_TARGET_IDENTITY=""
@@ -412,55 +411,72 @@ if [[ "${1:-}" == "ios164-build" ]]; then
     echo "Skipping update prompt in build-only mode."
 else
     echo "Checking for updates..."
+    mkdir -p update
     rm -rf update/latest.txt
-    curl -L -o update/latest.txt "$UPDATE_REPOSITORY_URL/raw/refs/heads/$UPDATE_BRANCH/update/latest.txt"
-    LATEST_VERSION=$(head -n 1 "update/latest.txt" | tr -d '\r\n')
-    RELEASE_NOTES=$(awk '/^RELEASE NOTES:/{flag=1; next} flag' "update/latest.txt")
-
-if [[ $LATEST_VERSION != $CURRENT_VERSION ]]; then
-    echo "A new version of surrealra1n is available: $LATEST_VERSION"
-    echo "RELEASE NOTES:"
-    echo "$RELEASE_NOTES"
-    echo ""
-    echo "It is strongly recommended to update to get the latest features + bug fixes."
-    read -p "Would you like to update now? (y/n): " update
-    if [[ $update == y || $update == Y ]]; then
-        rm -rf "updatefiles"
-        mkdir updatefiles
-        rm -rf "updatefiles/repo"
-        git clone --branch "$UPDATE_BRANCH" "$UPDATE_REPOSITORY_URL" updatefiles/repo --recursive
-        if [[ ! -d updatefiles/repo ]]; then
-            echo "Failed to clone repository."
-            exit 1
-        fi
-        rm -rf "surrealra1n.old"
-        mkdir -p surrealra1n.old # make folder to back up old surrealra1n installation
-        echo "$CURRENT_VERSION" > surrealra1n.old/oldversion.txt
-        echo "Backing up your current surrealra1n installation..."
-        mv -v bin surrealra1n.old/
-        mv -v futurerestore surrealra1n.old/
-        mv -v keys surrealra1n.old/
-        mv -v surrealra1n.sh surrealra1n.old/
-        rm -rf "bin"
-        rm -rf "futurerestore"
-        rm -rf "keys"
-        echo "Copying new files..."
-        cp -av updatefiles/repo/. ./
-        chmod +x surrealra1n.sh
-
-        rm -rf "updatefiles"
-        echo "surrealra1n has been updated! Please run the script again"
-        exit 0
-    else
-        echo "You have declined the update."
-        echo "This version of surrealra1n is no longer supported, so it is recommended to update as soon as possible."
-        outdated=1
-        read -p "Press enter to continue"
+    LATEST_VERSION=""
+    RELEASE_NOTES=""
+    if curl -fsSL --retry 2 -o update/latest.txt "$UPDATE_REPOSITORY_URL/raw/refs/heads/$UPDATE_BRANCH/update/latest.txt?cachebust=$(date +%s)"; then
+        LATEST_VERSION=$(head -n 1 "update/latest.txt" | tr -d '\r\n')
+        RELEASE_NOTES=$(awk '/^RELEASE NOTES:/{flag=1; next} flag' "update/latest.txt")
     fi
-else
-    echo "surrealra1n is up to date."
-    sleep 1
-fi
+
+    if [[ -z "$LATEST_VERSION" ]]; then
+        echo "Could not read update information. Continuing without an update check."
+    elif [[ "$LATEST_VERSION" != "$CURRENT_VERSION" ]]; then
+        CURRENT_BETA=""
+        LATEST_BETA=""
+        if [[ "$CURRENT_VERSION" =~ [[:space:]]beta[[:space:]]+([0-9]+) ]]; then
+            CURRENT_BETA="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$LATEST_VERSION" =~ [[:space:]]beta[[:space:]]+([0-9]+) ]]; then
+            LATEST_BETA="${BASH_REMATCH[1]}"
+        fi
+
+        if [[ -n "$CURRENT_BETA" && -n "$LATEST_BETA" ]] && (( 10#$LATEST_BETA <= 10#$CURRENT_BETA )); then
+            echo "Ignoring stale beta update marker: $LATEST_VERSION"
+        else
+            echo "A new version of surrealra1n is available: $LATEST_VERSION"
+            echo "RELEASE NOTES:"
+            echo "$RELEASE_NOTES"
+            echo ""
+            echo "It is strongly recommended to update to get the latest features + bug fixes."
+            read -p "Would you like to update now? (y/n): " update
+            if [[ $update == y || $update == Y ]]; then
+                rm -rf "updatefiles"
+                mkdir updatefiles
+                rm -rf "updatefiles/repo"
+                git clone --branch "$UPDATE_BRANCH" "$UPDATE_REPOSITORY_URL" updatefiles/repo --recursive
+                if [[ ! -d updatefiles/repo ]]; then
+                    echo "Failed to clone repository."
+                    exit 1
+                fi
+                rm -rf "surrealra1n.old"
+                mkdir -p surrealra1n.old # make folder to back up old surrealra1n installation
+                echo "$CURRENT_VERSION" > surrealra1n.old/oldversion.txt
+                echo "Backing up your current surrealra1n installation..."
+                mv -v bin surrealra1n.old/
+                mv -v futurerestore surrealra1n.old/
+                mv -v keys surrealra1n.old/
+                mv -v surrealra1n.sh surrealra1n.old/
+                rm -rf "bin"
+                rm -rf "futurerestore"
+                rm -rf "keys"
+                echo "Copying new files..."
+                cp -av updatefiles/repo/. ./
+                chmod +x surrealra1n.sh
+
+                rm -rf "updatefiles"
+                echo "surrealra1n has been updated! Please run the script again"
+                exit 0
+            else
+                echo "You have declined the update. Continuing with the current version."
+                read -p "Press enter to continue"
+            fi
+        fi
+    else
+        echo "surrealra1n is up to date."
+        sleep 1
+    fi
 fi
 
 echo "Checking for existing binaries..."
@@ -3744,15 +3760,6 @@ fi
 }
 
 restore_utils(){
-
-if [[ $outdated == 1 ]]; then
-    echo "This surrealra1n beta has expired"
-    echo "A newer beta is available. Please update to continue."
-    echo "You will need to exit, re-run surrealra1n.sh, and when it prompts for an update, update surrealra1n."
-    sleep 10
-    main_menu
-    return
-fi
 
 if [[ $IDENTIFIER == NONE ]]; then
     main_menu
