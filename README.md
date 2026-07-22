@@ -22,7 +22,8 @@ Requirements:
   - `iPhone12,8` — iPhone SE (2nd generation)
 - `<target.ipsw>` must be the iOS 16.4 (20E247) IPSW for that identifier.
 - `<base.ipsw>` must be the iOS 26.5.2 (23F84) IPSW for that same identifier.
-- The builder requires Apple Silicon macOS with Rosetta installed.
+- The builder requires macOS 10.15 or newer. Apple Silicon Macs use Rosetta for x86_64 helper tools.
+- If moving between Intel and Apple Silicon, use a clean source checkout so generated helper tools are rebuilt for that host.
 
 The builder validates both IPSWs and resolves their matching erase identities
 before building. It creates the local-boot iBSS payload and custom restore IPSW
@@ -57,8 +58,6 @@ libimobiledevice team, tihmstar, LukeeGD/LukeZGD, xerub, plooshi, etc! (for the 
 Mineek - iPhone X restored patcher, used for ipx restores 14.3-15.6.1 (my fork of the patcher is used for seprmvr64 restores on A8+), openra1n, and seprmvr64
 
 Nathan (verygenericname) - SSHRD_Script
-
-
 
 
 

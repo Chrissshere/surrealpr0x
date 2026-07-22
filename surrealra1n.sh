@@ -3770,6 +3770,21 @@ fix_ios164_tool_permissions(){
     done
 }
 
+verify_ios164_host_tools(){
+    local tool tool_info
+
+    [[ "$(uname -m)" == "x86_64" ]] || return 0
+    command -v file >/dev/null 2>&1 || return 0
+    for tool in "$@"; do
+        tool_info=$(file -b "$tool" 2>/dev/null || true)
+        [[ "$tool_info" == *x86_64* ]] || {
+            echo "iOS 16.4 helper is not Intel-compatible: $tool"
+            echo "Use a clean source checkout so the Intel bootstrap can rebuild its generated tools."
+            return 1
+        }
+    done
+}
+
 prepare_ios164_build_inputs(){
     local target_ipsw="$1"
     local base_ipsw="$2"
@@ -3779,15 +3794,7 @@ prepare_ios164_build_inputs(){
     local img4_probe img4_output
 
     [[ "$(uname -s)" == "Darwin" ]] || {
-        echo "iOS 16.4 beta builds currently require Apple Silicon macOS with Rosetta."
-        exit 2
-    }
-    [[ "$(uname -m)" == "arm64" ]] || {
-        echo "iOS 16.4 beta builds require Apple Silicon because bundled tools include arm64-only binaries."
-        exit 2
-    }
-    /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1 || {
-        echo "iOS 16.4 beta builds require Rosetta because bundled tools include x86_64-only binaries."
+        echo "iOS 16.4 beta builds currently require macOS."
         exit 2
     }
     command -v hdiutil >/dev/null 2>&1 || {
@@ -3817,6 +3824,17 @@ prepare_ios164_build_inputs(){
         "$SCRIPT_DIR/bin/img4" \
         "$SCRIPT_DIR/bin/patch_ios164_kernel.py" \
         "$SCRIPT_DIR/bin/patch_ios164_ramdisk.sh"
+    verify_ios164_host_tools \
+        "$SCRIPT_DIR/tools/img4-ios164" \
+        "$SCRIPT_DIR/bin/iBootPatch" \
+        "$SCRIPT_DIR/bin/iBootpatch2" \
+        "$SCRIPT_DIR/bin/Kernel64Patcher3" \
+        "$SCRIPT_DIR/bin/asr64_patcher" \
+        "$SCRIPT_DIR/bin/libimg4_patcher" \
+        "$SCRIPT_DIR/bin/ldid" \
+        "$SCRIPT_DIR/bin/trustcache" \
+        "$SCRIPT_DIR/bin/kerneldiff" \
+        "$SCRIPT_DIR/bin/img4" || exit 2
     [[ -f "$SCRIPT_DIR/tools/kernel_patchfinder.py" ]] || {
         echo "Missing required iOS 16.4 patchfinder: $SCRIPT_DIR/tools/kernel_patchfinder.py"
         exit 2
