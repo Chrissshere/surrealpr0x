@@ -75,6 +75,8 @@ def main() -> int:
         component_path(identity, "OS"),
         component_path(identity, "RestoreRamDisk"),
         component_path(identity, "RestoreTrustCache"),
+        component_path(identity, "iBSS"),
+        component_path(identity, "iBEC"),
     )
     print("\t".join(fields))
     return 0

@@ -38,6 +38,10 @@ IOS164_TARGET_RAMDISK=""
 IOS164_BASE_RAMDISK=""
 IOS164_TARGET_TRUSTCACHE=""
 IOS164_BASE_TRUSTCACHE=""
+IOS164_TARGET_IBSS=""
+IOS164_BASE_IBSS=""
+IOS164_TARGET_IBEC=""
+IOS164_BASE_IBEC=""
 if [[ "${1:-}" == "ios164-build" && "${2:-}" == iPhone* ]]; then
     IOS164_BUILD_DEVICE="$2"
 fi
@@ -556,8 +560,11 @@ elif [[ $dist == 3 ]]; then
     cd futurerestore || exit
     unzip -o futurerestore.zip
     tar -xf futurerestore-macOS-v2.0.0-Build_329-RELEASE.tar.xz
-    cp futurerestore-macOS-v2.0.0-Build_329-RELEASE/* . || true
+    if [[ -d futurerestore-macOS-v2.0.0-Build_329-RELEASE ]]; then
+        cp futurerestore-macOS-v2.0.0-Build_329-RELEASE/* .
+    fi
     chmod +x futurerestore
+    [[ -x futurerestore ]] || { echo "futurerestore was not extracted successfully"; exit 1; }
     rm -rf *.tar.xz
     rm -rf *.sh
     rm -rf *.zip
@@ -655,8 +662,11 @@ elif [[ $dist == 4 ]]; then
     cd futurerestore || exit
     unzip -o futurerestore.zip
     tar -xf futurerestore-macOS-v2.0.0-Build_329-RELEASE.tar.xz
-    cp futurerestore-macOS-v2.0.0-Build_329-RELEASE/* . || true
+    if [[ -d futurerestore-macOS-v2.0.0-Build_329-RELEASE ]]; then
+        cp futurerestore-macOS-v2.0.0-Build_329-RELEASE/* .
+    fi
     chmod +x futurerestore
+    [[ -x futurerestore ]] || { echo "futurerestore was not extracted successfully"; exit 1; }
     rm -rf *.tar.xz
     rm -rf *.sh
     rm -rf *.zip
@@ -756,11 +766,14 @@ else
     cd futurerestore || exit
     unzip -o futurerestore.zip
     tar -xf futurerestore-Linux-x86_64-v2.0.0-Build_329-RELEASE.tar.xz
-    cp futurerestore-Linux-x86_64-v2.0.0-Build_329-RELEASE/* . || true
+    if [[ -d futurerestore-Linux-x86_64-v2.0.0-Build_329-RELEASE ]]; then
+        cp futurerestore-Linux-x86_64-v2.0.0-Build_329-RELEASE/* .
+    fi
     chmod +x linux_fix.sh || true
     sudo ./linux_fix.sh || true
     rm -rf linux_fix.sh || true
     chmod +x futurerestore
+    [[ -x futurerestore ]] || { echo "futurerestore was not extracted successfully"; exit 1; }
     rm -rf *.tar.xz || true
     rm -rf *.sh || true
     rm -rf *.zip || true
@@ -776,7 +789,13 @@ if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
 elif [[ -x "./.venv/bin/python" ]]; then
     LITER8_PYTHON="./.venv/bin/python"
 fi
-if ! "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
+if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
+    libusb_prefix="$(brew --prefix libusb 2>/dev/null || true)"
+    if [[ -f "$libusb_prefix/lib/libusb-1.0.dylib" ]]; then
+        export DYLD_FALLBACK_LIBRARY_PATH="$libusb_prefix/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+    fi
+fi
+if ! "$LITER8_PYTHON" -c 'from usb.backend import libusb1; raise SystemExit(libusb1.get_backend() is None)' 2>/dev/null; then
     echo "pyusb missing for: $LITER8_PYTHON"
     echo "Creating local .venv and installing pyusb..."
     if command -v python3 >/dev/null 2>&1; then
@@ -787,11 +806,11 @@ if ! "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
         fi
     fi
 fi
-if "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
+if "$LITER8_PYTHON" -c 'from usb.backend import libusb1; raise SystemExit(libusb1.get_backend() is None)' 2>/dev/null; then
     echo "pyusb: ok ($LITER8_PYTHON)"
 else
-    echo "WARNING: pyusb still missing. liter8ctl will fail to boot iBSS on A12/A13."
-    echo "Fix:  cd surrealra1n && python3 -m venv .venv && .venv/bin/pip install pyusb"
+    echo "WARNING: pyusb or its libusb backend is unavailable. liter8ctl cannot boot iBSS."
+    echo "Fix: install pyusb in .venv and install libusb with your package manager."
 fi
 
 if [[ -n "$IOS164_BUILD_DEVICE" ]]; then
@@ -2112,7 +2131,103 @@ rm -rf "work"
 
 }
 
+validate_ios164_archive_component(){
+
+    local custom_ipsw="$1"
+    local base_ipsw="$2"
+    local member="$3"
+    local label="$4"
+    local check_dir
+
+    [[ -f "$custom_ipsw" && -f "$base_ipsw" ]] || {
+        echo "FATAL: cannot validate the iOS 16.4 archive $label."
+        return 1
+    }
+
+    check_dir=$(mktemp -d "${TMPDIR:-/tmp}/surrealra1n-ios164-ibec.XXXXXX") || {
+        echo "FATAL: cannot create the iOS 16.4 archive validation directory."
+        return 1
+    }
+
+    if ! unzip -p "$base_ipsw" "$member" > "$check_dir/base.im4p" ||
+       ! unzip -p "$custom_ipsw" "$member" > "$check_dir/custom.im4p" ||
+       [[ ! -s "$check_dir/base.im4p" || ! -s "$check_dir/custom.im4p" ]]; then
+        rm -rf "$check_dir"
+        echo "FATAL: could not extract the iOS 16.4 archive $label."
+        return 1
+    fi
+
+    if ! cmp -s "$check_dir/base.im4p" "$check_dir/custom.im4p"; then
+        rm -rf "$check_dir"
+        echo "FATAL: iOS 16.4 custom IPSW $label differs from the signed base component."
+        return 1
+    fi
+
+    rm -rf "$check_dir"
+    echo "iOS 16.4 archive $label matches the signed base IPSW component."
+}
+
+validate_ios164_archive_boot_components(){
+
+    local custom_ipsw="$1"
+    local base_ipsw="$2"
+    local ibss_member="${IOS164_BASE_IBSS:-Firmware/dfu/$IBSS}"
+    local ibec_member="${IOS164_BASE_IBEC:-Firmware/dfu/$IBEC}"
+
+    validate_ios164_archive_component "$custom_ipsw" "$base_ipsw" "$ibss_member" iBSS || return 1
+    validate_ios164_archive_component "$custom_ipsw" "$base_ipsw" "$ibec_member" iBEC || return 1
+    validate_ios164_archive_kernel_entries "$custom_ipsw"
+}
+
+validate_ios164_archive_kernel_entries(){
+
+    local custom_ipsw="$1"
+    local python_bin="${LITER8_PYTHON:-python3}"
+
+    [[ -n "$IOS164_BASE_IDENTITY" && -n "$BOARDID" && -n "$KERNEL" && -n "$KERNEL2" ]] || {
+        echo "FATAL: missing iOS 16.4 manifest state for archive validation."
+        return 1
+    }
+
+    "$python_bin" - "$custom_ipsw" "$IOS164_BASE_IDENTITY" "$BOARDID" "$KERNEL2" "$KERNEL" <<'PY'
+import plistlib
+import sys
+import zipfile
+
+
+def fail(message: str) -> None:
+    print(f"FATAL: {message}")
+    raise SystemExit(1)
+
+
+archive_path, identity_index, board, expected_kernel, expected_restore_kernel = sys.argv[1:]
+try:
+    with zipfile.ZipFile(archive_path) as archive:
+        manifest = plistlib.loads(archive.read("BuildManifest.plist"))
+        identity = manifest["BuildIdentities"][int(identity_index)]
+        info = identity["Info"]
+        if info.get("DeviceClass") != board or info.get("RestoreBehavior") != "Erase":
+            fail("iOS 16.4 archive identity does not match the selected board")
+        for component, expected_path in (
+            ("KernelCache", expected_kernel),
+            ("RestoreKernelCache", expected_restore_kernel),
+        ):
+            path = identity["Manifest"][component]["Info"]["Path"]
+            if path != expected_path:
+                fail(f"iOS 16.4 archive {component} path is unexpected: {path}")
+            entry = archive.getinfo(path)
+            if entry.is_dir() or entry.file_size == 0:
+                fail(f"iOS 16.4 archive {component} is empty: {path}")
+except (IndexError, KeyError, TypeError, ValueError, zipfile.BadZipFile, plistlib.InvalidFileException) as exc:
+    fail(f"cannot validate iOS 16.4 archive kernel paths: {exc}")
+
+print("iOS 16.4 archive kernel paths match the selected board identity.")
+PY
+}
+
 make_custom_ipsw_a12_ios14(){
+
+local ios164_base_ibec_path=""
 
 if [[ $VERSION == 16.4 && -z "${IOS164_TARGET_IDENTITY:-}" ]]; then
     prepare_ios164_build_inputs "$IPSW_PATH" "$IPSW_PATH_LATEST"
@@ -2132,6 +2247,13 @@ if [[ -n "$IOS164_BUILD_DEVICE" ]]; then
     chmod -R u+w tmp2
 fi
 mkdir -p work
+if [[ $VERSION == 16.4 ]]; then
+    ios164_base_ibec_path="tmp2/$IOS164_BASE_IBEC"
+    [[ -s "$ios164_base_ibec_path" ]] || {
+        echo "FATAL: missing base iBEC component: $ios164_base_ibec_path"
+        exit 1
+    }
+fi
 # iBSS patching of course because yes
     if [[ $VERSION == 14.0 ]] && [[ $BUILD != 18A373 ]]; then
     if [[ $IDENTIFIER == iPhone11,8 ]]; then
@@ -2170,12 +2292,21 @@ elif [[ $VERSION == 14.5* || $VERSION == 14.6* || $VERSION == 14.7* || $VERSION 
         ./bin/iBootPatch work/iBSS.raw boot/$IDENTIFIER/iBSS.patch
         ./bin/iBootPatch work/iBSS.raw work/iBSS.patchboot
         if [[ $VERSION == 16.4 ]]; then
+            cp boot/$IDENTIFIER/iBSS.patch boot/$IDENTIFIER/$VERSION/iBSS.patch
             [[ -s boot/$IDENTIFIER/iBSS.patch && -s work/iBSS.patchboot ]] || {
                 echo "iOS 16.4 iBSS patch output is missing"
                 exit 1
             }
+            [[ -s boot/$IDENTIFIER/$VERSION/iBSS.patch ]] || {
+                echo "iOS 16.4 versioned iBSS patch output is missing"
+                exit 1
+            }
             cmp -s work/iBSS.raw boot/$IDENTIFIER/iBSS.patch && {
                 echo "iOS 16.4 iBSS patch made no changes"
+                exit 1
+            }
+            cmp -s boot/$IDENTIFIER/iBSS.patch boot/$IDENTIFIER/$VERSION/iBSS.patch || {
+                echo "iOS 16.4 versioned iBSS patch does not match the build output"
                 exit 1
             }
             cmp -s work/iBSS.raw work/iBSS.patchboot && {
@@ -2184,7 +2315,11 @@ elif [[ $VERSION == 14.5* || $VERSION == 14.6* || $VERSION == 14.7* || $VERSION 
             }
         fi
     ./bin/iBootpatch2 work/iBSS.patchboot boot/$IDENTIFIER/$VERSION/iBSS.boot
-    ./bin/img4 -i boot/$IDENTIFIER/iBSS.patch -o tmp2/Firmware/dfu/$IBEC -A -T ibec
+    if [[ $VERSION == 16.4 ]]; then
+        echo "iOS 16.4: keeping the signed base iBEC unchanged."
+    else
+        ./bin/img4 -i boot/$IDENTIFIER/iBSS.patch -o tmp2/Firmware/dfu/$IBEC -A -T ibec
+    fi
 else
     ./bin/img4 -i tmp1/Firmware/dfu/$IBSS -o work/iBSS.raw -k $IBSS_KEY
     ./bin/iBoot64Patcher2 work/iBSS.raw boot/$IDENTIFIER/iBSS.patch
@@ -2459,6 +2594,13 @@ fi
 cd tmp2
 zip -0 -r ../custom.ipsw *
 cd ..
+if [[ $VERSION == 16.4 ]]; then
+    validate_ios164_archive_boot_components custom.ipsw "$IPSW_PATH_LATEST" || {
+        rm -f custom.ipsw
+        rm -rf tmp1 tmp2 work
+        exit 1
+    }
+fi
 rm -rf "tmp1"
 rm -rf "tmp2"
 mv -v custom.ipsw $restoredir/custom.ipsw
@@ -2496,8 +2638,8 @@ if [[ $IDENTIFIER == iPhone11* || $IDENTIFIER == iPhone12* || $IDENTIFIER == iPa
         LITER8_PYTHON="python3"
         [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && LITER8_PYTHON="$SCRIPT_DIR/.venv/bin/python"
     fi
-    if ! "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
-        echo "FATAL: pyusb missing ($LITER8_PYTHON). Install: python3 -m venv .venv && .venv/bin/pip install pyusb"
+    if ! "$LITER8_PYTHON" -c 'from usb.backend import libusb1; raise SystemExit(libusb1.get_backend() is None)' 2>/dev/null; then
+        echo "FATAL: pyusb or its libusb backend is unavailable ($LITER8_PYTHON)."
         exit 1
     fi
     if [[ $dist == 1 || $dist == 2 || $dist == 5 ]]; then
@@ -2839,9 +2981,13 @@ else
     done
 fi
 
-echo "Restore has completed! Read above if there is any errors"
-prepare_boot_files
-exit 0
+if [[ ${EXIT_CODE:-1} -eq 0 ]]; then
+    echo "Restore has completed! Read above if there are any errors"
+    prepare_boot_files
+    exit 0
+fi
+echo "futurerestore failed with exit code ${EXIT_CODE:-unknown}"
+exit 1
 
 }
 
@@ -2925,6 +3071,15 @@ elif [[ $VERSION == 15.4* || $VERSION == 15.5* || $VERSION == 15.6* ]] && [[ $ID
     read -p "Press enter to continue"
 fi
 
+if [[ $VERSION == 16.4 ]]; then
+    prepare_ios164_build_inputs "$IPSW_PATH" "$IPSW_PATH_LATEST"
+    if [[ ! -x ./futurerestore/futurerestore ]] ||
+       ! ./futurerestore/futurerestore -h >/dev/null 2>&1; then
+        echo "FATAL: futurerestore is missing or cannot run on this Mac."
+        exit 1
+    fi
+fi
+
 	dfu_helper_a11
 	pwn_device
 	det_rsep_flag
@@ -2945,7 +3100,7 @@ restoredir="restorefiles/$IDENTIFIER/$VERSION"
 IPHONE12_3_BB_MODE="${SURREALRA1N_11PRO_BB_MODE:-normal}"
 IPHONE12_3_BB_ENGINE="native-d421-v1"
 [[ $IPHONE12_3_BB_MODE == workaround ]] && IPHONE12_3_BB_ENGINE="upstream-workaround-v1"
-if [[ $IDENTIFIER == iPhone12,3 ]]; then
+if [[ $IDENTIFIER == iPhone12,3 && $VERSION != 16.4 ]]; then
     if [[ $IPHONE12_3_BB_MODE != workaround && $IPHONE12_3_BB_MODE != normal ]]; then
         echo "Invalid SURREALRA1N_11PRO_BB_MODE='$IPHONE12_3_BB_MODE' (use workaround or normal)."
         exit 1
@@ -2970,7 +3125,11 @@ if [[ ! -f "$restoredir/custom.ipsw" ]]; then
 else
     echo "Restore files already exist"
     restorefiles_remake=""
-    if [[ $IDENTIFIER == iPhone12,3 ]]; then
+    if [[ $VERSION == 16.4 ]] && ! validate_ios164_archive_boot_components "$restoredir/custom.ipsw" "$IPSW_PATH_LATEST"; then
+        echo "The existing iOS 16.4 artifact is invalid and will be rebuilt."
+        restorefiles_remake="Y"
+    fi
+    if [[ $IDENTIFIER == iPhone12,3 && $VERSION != 16.4 ]]; then
         existing_bb_mode="$(cat "$restoredir/.iphone12_3_bb_mode" 2>/dev/null || true)"
         existing_bb_engine="$(cat "$restoredir/.iphone12_3_bb_engine" 2>/dev/null || true)"
         # Earlier IPSWs used the baseless workaround.
@@ -2998,35 +3157,61 @@ else
         make_custom_ipsw_a12_ios14
     fi
 fi
-if [[ $IDENTIFIER == iPhone12,3 ]]; then
+if [[ $IDENTIFIER == iPhone12,3 && $VERSION != 16.4 ]]; then
     # Save the baseband mode with the generated IPSW.
     printf '%s\n' "$IPHONE12_3_BB_MODE" > "$restoredir/.iphone12_3_bb_mode"
     printf '%s\n' "$IPHONE12_3_BB_ENGINE" > "$restoredir/.iphone12_3_bb_engine"
 fi
-curl -L -o bin/liter8ctl https://github.com/prdgmshift/usbliter8/raw/refs/heads/main/usbliter8ctl
+local boot_ibss_path="boot/$IDENTIFIER/iBSS.patch"
+if [[ $VERSION == 16.4 ]]; then
+    boot_ibss_path="boot/$IDENTIFIER/$VERSION/iBSS.patch"
+    [[ -s "$boot_ibss_path" ]] || {
+        echo "FATAL: missing versioned iOS 16.4 restore iBSS: $boot_ibss_path"
+        exit 1
+    }
+fi
+local liter8ctl_hash="30f0cccee9ac359ac0bee11e165f8bd3f23849c913f4b5a8c4fc0ee3be7377b3"
+curl --fail --location --retry 2 -o bin/liter8ctl \
+    https://raw.githubusercontent.com/prdgmshift/usbliter8/afe8b5c8998fce63e76c0b2a88c606c61e2950c7/usbliter8ctl || {
+    echo "FATAL: could not download the pinned liter8ctl dependency."
+    exit 1
+}
+local downloaded_liter8ctl_hash
+if command -v shasum >/dev/null 2>&1; then
+    downloaded_liter8ctl_hash=$(shasum -a 256 bin/liter8ctl | awk '{print $1}')
+elif command -v sha256sum >/dev/null 2>&1; then
+    downloaded_liter8ctl_hash=$(sha256sum bin/liter8ctl | awk '{print $1}')
+else
+    echo "FATAL: a SHA-256 tool is required to verify liter8ctl."
+    exit 1
+fi
+[[ "$downloaded_liter8ctl_hash" == "$liter8ctl_hash" ]] || {
+    echo "FATAL: downloaded liter8ctl did not match the pinned checksum."
+    exit 1
+}
 chmod +x bin/liter8ctl 2>/dev/null || true
 # pyusb is required before booting.
 if [[ -z "${LITER8_PYTHON:-}" ]]; then
     LITER8_PYTHON="python3"
     [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && LITER8_PYTHON="$SCRIPT_DIR/.venv/bin/python"
 fi
-if ! "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
-    echo "FATAL: pyusb not importable ($LITER8_PYTHON). Cannot send iBSS via liter8ctl."
-    echo "Run:  cd \"$SCRIPT_DIR\" && python3 -m venv .venv && .venv/bin/pip install pyusb"
+if ! "$LITER8_PYTHON" -c 'from usb.backend import libusb1; raise SystemExit(libusb1.get_backend() is None)' 2>/dev/null; then
+    echo "FATAL: pyusb or its libusb backend is unavailable ($LITER8_PYTHON)."
+    echo "Install pyusb in .venv and install libusb before retrying."
     exit 1
 fi
 # Keep the device in pwned DFU until the files are ready.
 echo "Booting patched iBSS with liter8ctl ($LITER8_PYTHON)..."
 if [[ $dist == 1 || $dist == 2 || $dist == 5 ]]; then
-    "$LITER8_PYTHON" bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch || true
+    "$LITER8_PYTHON" bin/liter8ctl boot "$boot_ibss_path" || true
     echo "If you see the error: No such device (it may have been disconnected)"
     echo "This error is normal on Linux as long as the Device enters iBSS recovery mode (screen Should remain blank but be detected as Recovery mode device)."
 elif [[ $dist == 3 ]] && [[ ${macos_ver:-} == 27.* || ${macos_ver:-} == 26.* ]]; then
-    "$LITER8_PYTHON" bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch || true
+    "$LITER8_PYTHON" bin/liter8ctl boot "$boot_ibss_path" || true
     echo "usbliter8ctl may error out after a successful handoff."
     echo "The error may be normal as long as the Device enters iBSS recovery mode (screen Should remain blank but be detected as Recovery mode device)."
 else
-    "$LITER8_PYTHON" bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch
+    "$LITER8_PYTHON" bin/liter8ctl boot "$boot_ibss_path"
 fi
 sleep 6
 echo "Checking if device is in Recovery mode"
@@ -3038,7 +3223,7 @@ else
     echo "Checklist:"
     echo "  1) pyusb works:  $LITER8_PYTHON -c 'import usb'"
     echo "  2) phone still PWND DFU (re-pwn with Pico if needed)"
-    echo "  3) boot file exists: boot/$IDENTIFIER/iBSS.patch"
+    echo "  3) boot file exists: $boot_ibss_path"
     echo "  4) re-run Start Restore; custom.ipsw is already built — answer n to remake"
     exit 1
 fi
@@ -3064,18 +3249,47 @@ fi
 mkdir -p logs
 restore_log="logs/${IDENTIFIER//,/_}-${VERSION}-$(date +%Y%m%d-%H%M%S).log"
 echo "Saving the complete futurerestore log to: $restore_log"
+local restore_attempt=0
+local max_restore_attempts=3
+local attempt_log=""
+local tee_exit_code=0
+local -a pipe_status=()
 while true; do
+    restore_attempt=$((restore_attempt + 1))
+    attempt_log=$(mktemp "${TMPDIR:-/tmp}/surrealra1n-futurerestore.XXXXXX") || {
+        echo "Could not create a futurerestore attempt log."
+        exit 1
+    }
     set +e
     sudo ./futurerestore/futurerestore -t "$SHSH_PATH" $rsep_flag --latest-sep \
-        $updatebb_flag "$restoredir/custom.ipsw" 2>&1 | tee -a "$restore_log"
-    EXIT_CODE=${PIPESTATUS[0]}
+        $updatebb_flag "$restoredir/custom.ipsw" 2>&1 | tee -a "$restore_log" "$attempt_log"
+    pipe_status=("${PIPESTATUS[@]}")
+    EXIT_CODE=${pipe_status[0]}
+    tee_exit_code=${pipe_status[1]}
     set -e
     if [[ $EXIT_CODE -eq 139 ]]; then
+        rm -f "$attempt_log"
+        if [[ $restore_attempt -ge $max_restore_attempts ]]; then
+            echo "futurerestore kept crashing after $restore_attempt attempts."
+            break
+        fi
         echo "futurerestore segfaulted (exit 139), retrying..."
         sleep 2
-    else
-        break
+        continue
     fi
+    if [[ $tee_exit_code -ne 0 ]]; then
+        echo "Could not save the futurerestore log."
+        EXIT_CODE=1
+    elif grep -Fq 'Done: restoring failed!' "$attempt_log" ||
+         grep -Fq '[exception]:' "$attempt_log"; then
+        echo "futurerestore reported a restore failure despite exit code $EXIT_CODE."
+        EXIT_CODE=1
+    elif ! grep -Fq 'Done: restoring succeeded!' "$attempt_log"; then
+        echo "futurerestore exited without a verified completion marker."
+        EXIT_CODE=1
+    fi
+    rm -f "$attempt_log"
+    break
 done
 if [[ $EXIT_CODE -eq 0 ]]; then
     echo "Restore has completed! Read above if there are any errors"
@@ -3565,7 +3779,15 @@ prepare_ios164_build_inputs(){
     local img4_probe img4_output
 
     [[ "$(uname -s)" == "Darwin" ]] || {
-        echo "iOS 16.4 beta builds currently require macOS."
+        echo "iOS 16.4 beta builds currently require Apple Silicon macOS with Rosetta."
+        exit 2
+    }
+    [[ "$(uname -m)" == "arm64" ]] || {
+        echo "iOS 16.4 beta builds require Apple Silicon because bundled tools include arm64-only binaries."
+        exit 2
+    }
+    /usr/bin/arch -x86_64 /usr/bin/true >/dev/null 2>&1 || {
+        echo "iOS 16.4 beta builds require Rosetta because bundled tools include x86_64-only binaries."
         exit 2
     }
     command -v hdiutil >/dev/null 2>&1 || {
@@ -3614,10 +3836,10 @@ prepare_ios164_build_inputs(){
         "$base_ipsw" "$IDENTIFIER" "$BOARDID")
     IFS=$'\t' read -r target_version target_build IOS164_TARGET_IDENTITY \
         IOS164_TARGET_KERNEL IOS164_TARGET_OS IOS164_TARGET_RAMDISK \
-        IOS164_TARGET_TRUSTCACHE <<<"$target_values"
+        IOS164_TARGET_TRUSTCACHE IOS164_TARGET_IBSS IOS164_TARGET_IBEC <<<"$target_values"
     IFS=$'\t' read -r base_version base_build IOS164_BASE_IDENTITY \
         IOS164_BASE_KERNEL IOS164_BASE_OS IOS164_BASE_RAMDISK \
-        IOS164_BASE_TRUSTCACHE <<<"$base_values"
+        IOS164_BASE_TRUSTCACHE IOS164_BASE_IBSS IOS164_BASE_IBEC <<<"$base_values"
 
     [[ "$target_version" == "16.4" && "$target_build" == "20E247" ]] || {
         echo "Target must be iOS 16.4 (20E247), got $target_version ($target_build)"
@@ -3631,19 +3853,23 @@ prepare_ios164_build_inputs(){
        -n "$IOS164_TARGET_KERNEL" && -n "$IOS164_BASE_KERNEL" && \
        -n "$IOS164_TARGET_OS" && -n "$IOS164_BASE_OS" && \
        -n "$IOS164_TARGET_RAMDISK" && -n "$IOS164_BASE_RAMDISK" && \
-       -n "$IOS164_TARGET_TRUSTCACHE" && -n "$IOS164_BASE_TRUSTCACHE" ]] || {
+       -n "$IOS164_TARGET_TRUSTCACHE" && -n "$IOS164_BASE_TRUSTCACHE" && \
+       -n "$IOS164_TARGET_IBSS" && -n "$IOS164_BASE_IBSS" && \
+       -n "$IOS164_TARGET_IBEC" && -n "$IOS164_BASE_IBEC" ]] || {
         echo "Could not resolve the selected iOS 16.4 manifest identity."
         exit 2
     }
-    local ibss_key ibec_key
-    ibss_key=$(grep '^ibss-16.4:' "$KEY_FILE" | cut -d':' -f2 | xargs)
-    ibec_key=$(grep '^ibec-16.4:' "$KEY_FILE" | cut -d':' -f2 | xargs)
-    [[ "$ibss_key" =~ ^[0-9A-Fa-f]{96}$ ]] || {
-        echo "Missing iBSS 16.4 key in $KEY_FILE"
+    local ibss_key expected_ibss_path expected_ibec_path
+    expected_ibss_path="Firmware/dfu/$IBSS"
+    expected_ibec_path="Firmware/dfu/$IBEC"
+    [[ "$IOS164_TARGET_IBSS" == "$expected_ibss_path" && "$IOS164_BASE_IBSS" == "$expected_ibss_path" && \
+       "$IOS164_TARGET_IBEC" == "$expected_ibec_path" && "$IOS164_BASE_IBEC" == "$expected_ibec_path" ]] || {
+        echo "The selected IPSW does not match the expected iBSS/iBEC path for $IDENTIFIER."
         exit 2
     }
-    [[ "$ibec_key" =~ ^[0-9A-Fa-f]{96}$ ]] || {
-        echo "Missing iBEC 16.4 key in $KEY_FILE"
+    ibss_key=$(grep '^ibss-16.4:' "$KEY_FILE" | cut -d':' -f2 | xargs)
+    [[ "$ibss_key" =~ ^[0-9A-Fa-f]{96}$ ]] || {
+        echo "Missing iBSS 16.4 key in $KEY_FILE"
         exit 2
     }
 
@@ -3756,6 +3982,10 @@ ios164_build(){
 
     [[ -s "boot/$IDENTIFIER/$VERSION/iBSS.boot" ]] || {
         echo "Build failed: missing local-boot iBSS"
+        exit 1
+    }
+    [[ -s "boot/$IDENTIFIER/$VERSION/iBSS.patch" ]] || {
+        echo "Build failed: missing versioned restore iBSS"
         exit 1
     }
     [[ -s "$restoredir/custom.ipsw" ]] || {
