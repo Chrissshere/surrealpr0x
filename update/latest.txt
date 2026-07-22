@@ -1,7 +1,9 @@
-v2.0 beta 19
+v2.0 beta 21
 
 RELEASE NOTES:
 
 Add the experimental iOS 16.4 builder for supported A12 and A13 iPhones
 Validate the selected target and base IPSWs before building
 Document supported identifiers and beta install instructions
+Allow iOS 16.4 builds on Intel macOS and rebuild mismatched helper binaries
+Fix the beta update marker so beta 21 does not expire immediately
