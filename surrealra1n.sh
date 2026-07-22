@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 22"
+CURRENT_VERSION="v2.0 beta 23"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -2190,12 +2190,12 @@ rm -rf "work"
 validate_ios164_archive_component(){
 
     local custom_ipsw="$1"
-    local base_ipsw="$2"
+    local reference_ipsw="$2"
     local member="$3"
     local label="$4"
     local check_dir
 
-    [[ -f "$custom_ipsw" && -f "$base_ipsw" ]] || {
+    [[ -f "$custom_ipsw" && -f "$reference_ipsw" ]] || {
         echo "FATAL: cannot validate the iOS 16.4 archive $label."
         return 1
     }
@@ -2205,34 +2205,57 @@ validate_ios164_archive_component(){
         return 1
     }
 
-    if ! unzip -p "$base_ipsw" "$member" > "$check_dir/base.im4p" ||
+    if ! unzip -p "$reference_ipsw" "$member" > "$check_dir/reference.im4p" ||
        ! unzip -p "$custom_ipsw" "$member" > "$check_dir/custom.im4p" ||
-       [[ ! -s "$check_dir/base.im4p" || ! -s "$check_dir/custom.im4p" ]]; then
+       [[ ! -s "$check_dir/reference.im4p" || ! -s "$check_dir/custom.im4p" ]]; then
         rm -rf "$check_dir"
         echo "FATAL: could not extract the iOS 16.4 archive $label."
         return 1
     fi
 
-    if ! cmp -s "$check_dir/base.im4p" "$check_dir/custom.im4p"; then
+    if ! cmp -s "$check_dir/reference.im4p" "$check_dir/custom.im4p"; then
         rm -rf "$check_dir"
-        echo "FATAL: iOS 16.4 custom IPSW $label differs from the signed base component."
+        echo "FATAL: iOS 16.4 custom IPSW $label differs from the stock target component."
         return 1
     fi
 
     rm -rf "$check_dir"
-    echo "iOS 16.4 archive $label matches the signed base IPSW component."
+    echo "iOS 16.4 archive $label matches the stock target IPSW component."
 }
 
 validate_ios164_archive_boot_components(){
 
     local custom_ipsw="$1"
-    local base_ipsw="$2"
-    local ibss_member="${IOS164_BASE_IBSS:-Firmware/dfu/$IBSS}"
-    local ibec_member="${IOS164_BASE_IBEC:-Firmware/dfu/$IBEC}"
+    # Second arg is kept for callers; Odysseus path validates against the 16.4 target IPSW.
+    local _unused_base_ipsw="${2:-}"
+    local reference_ipsw="${IPSW_PATH:-}"
+    local ibss_member="${IOS164_TARGET_IBSS:-Firmware/dfu/$IBSS}"
+    local ibec_member="${IOS164_TARGET_IBEC:-Firmware/dfu/$IBEC}"
 
-    validate_ios164_archive_component "$custom_ipsw" "$base_ipsw" "$ibss_member" iBSS || return 1
-    validate_ios164_archive_component "$custom_ipsw" "$base_ipsw" "$ibec_member" iBEC || return 1
-    validate_ios164_archive_kernel_entries "$custom_ipsw"
+    [[ -f "$reference_ipsw" ]] || {
+        echo "FATAL: missing iOS 16.4 target IPSW for archive validation."
+        return 1
+    }
+
+    validate_ios164_archive_component "$custom_ipsw" "$reference_ipsw" "$ibss_member" iBSS || return 1
+    validate_ios164_archive_component "$custom_ipsw" "$reference_ipsw" "$ibec_member" iBEC || return 1
+    validate_ios164_archive_kernel_entries "$custom_ipsw" || return 1
+    validate_ios164_odysseus_artifacts "$(dirname "$custom_ipsw")"
+}
+
+validate_ios164_odysseus_artifacts(){
+
+    local restoredir="$1"
+    local missing=0
+
+    for f in ramdisk.im4p kernel.im4p ibss.patched.bin ibec.patched.bin; do
+        if [[ ! -s "$restoredir/$f" ]]; then
+            echo "FATAL: missing iOS 16.4 Odysseus artifact: $restoredir/$f"
+            missing=1
+        fi
+    done
+    [[ $missing -eq 0 ]] || return 1
+    echo "iOS 16.4 Odysseus artifacts (rdsk/rkrn/iBSS/iBEC) are present."
 }
 
 validate_ios164_archive_kernel_entries(){
@@ -2240,12 +2263,12 @@ validate_ios164_archive_kernel_entries(){
     local custom_ipsw="$1"
     local python_bin="${LITER8_PYTHON:-python3}"
 
-    [[ -n "$IOS164_BASE_IDENTITY" && -n "$BOARDID" && -n "$KERNEL" && -n "$KERNEL2" ]] || {
+    [[ -n "$IOS164_TARGET_IDENTITY" && -n "$BOARDID" && -n "$KERNEL" ]] || {
         echo "FATAL: missing iOS 16.4 manifest state for archive validation."
         return 1
     }
 
-    "$python_bin" - "$custom_ipsw" "$IOS164_BASE_IDENTITY" "$BOARDID" "$KERNEL2" "$KERNEL" <<'PY'
+    "$python_bin" - "$custom_ipsw" "$IOS164_TARGET_IDENTITY" "$BOARDID" "$KERNEL" <<'PY'
 import plistlib
 import sys
 import zipfile
@@ -2256,32 +2279,320 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-archive_path, identity_index, board, expected_kernel, expected_restore_kernel = sys.argv[1:]
+archive_path, identity_index, board, expected_kernel = sys.argv[1:]
 try:
     with zipfile.ZipFile(archive_path) as archive:
         manifest = plistlib.loads(archive.read("BuildManifest.plist"))
+        if str(manifest.get("ProductVersion", "")) != "16.4":
+            fail(
+                "iOS 16.4 archive ProductVersion is "
+                f"{manifest.get('ProductVersion')!r}, expected 16.4 "
+                "(hybrid base IPSWs cannot enter restore mode on this path)"
+            )
+        if str(manifest.get("ProductBuildVersion", "")) != "20E247":
+            fail(
+                "iOS 16.4 archive ProductBuildVersion is "
+                f"{manifest.get('ProductBuildVersion')!r}, expected 20E247"
+            )
         identity = manifest["BuildIdentities"][int(identity_index)]
         info = identity["Info"]
         if info.get("DeviceClass") != board or info.get("RestoreBehavior") != "Erase":
             fail("iOS 16.4 archive identity does not match the selected board")
-        for component, expected_path in (
-            ("KernelCache", expected_kernel),
-            ("RestoreKernelCache", expected_restore_kernel),
-        ):
-            path = identity["Manifest"][component]["Info"]["Path"]
-            if path != expected_path:
-                fail(f"iOS 16.4 archive {component} path is unexpected: {path}")
-            entry = archive.getinfo(path)
-            if entry.is_dir() or entry.file_size == 0:
-                fail(f"iOS 16.4 archive {component} is empty: {path}")
+        path = identity["Manifest"]["KernelCache"]["Info"]["Path"]
+        if path != expected_kernel:
+            fail(f"iOS 16.4 archive KernelCache path is unexpected: {path}")
+        entry = archive.getinfo(path)
+        if entry.is_dir() or entry.file_size == 0:
+            fail(f"iOS 16.4 archive KernelCache is empty: {path}")
+        # RestoreKernelCache usually aliases KernelCache on 16.4; accept either.
+        try:
+            rpath = identity["Manifest"]["RestoreKernelCache"]["Info"]["Path"]
+            rentry = archive.getinfo(rpath)
+            if rentry.is_dir() or rentry.file_size == 0:
+                fail(f"iOS 16.4 archive RestoreKernelCache is empty: {rpath}")
+        except KeyError:
+            pass
 except (IndexError, KeyError, TypeError, ValueError, zipfile.BadZipFile, plistlib.InvalidFileException) as exc:
     fail(f"cannot validate iOS 16.4 archive kernel paths: {exc}")
 
-print("iOS 16.4 archive kernel paths match the selected board identity.")
+print("iOS 16.4 archive is target-based (16.4/20E247) with valid kernel paths.")
 PY
 }
 
+ensure_ios164_futurerestore(){
+
+    local stock_bin="$SCRIPT_DIR/futurerestore/futurerestore"
+    local fr_bin="$SCRIPT_DIR/futurerestore/futurerestore-usbliter8"
+    local patcher="$SCRIPT_DIR/tools/patch_futurerestore_usbliter8.py"
+    local python_bin="${LITER8_PYTHON:-python3}"
+    local patch_word host_arch
+
+    [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && python_bin="$SCRIPT_DIR/.venv/bin/python"
+    host_arch=$(uname -m)
+    if [[ "$host_arch" != "arm64" ]]; then
+        echo "FATAL: the iOS 16.4 Odysseus restore path requires an Apple Silicon Mac."
+        echo "Stock futurerestore cannot take over from liter8 Recovery with --no-ibss,"
+        echo "and the usbliter8 FR patch set is arm64-only (Build 329)."
+        return 1
+    fi
+    [[ -f "$patcher" ]] || {
+        echo "FATAL: missing $patcher"
+        return 1
+    }
+    [[ -x "$stock_bin" ]] || {
+        echo "FATAL: stock futurerestore is missing at $stock_bin"
+        echo "Run surrealra1n once so it can download Build 329, then retry."
+        return 1
+    }
+
+    # Rebuild when missing or when the stock binary is newer than the patched one.
+    if [[ ! -x "$fr_bin" || "$stock_bin" -nt "$fr_bin" ]]; then
+        echo "Building usbliter8-patched futurerestore from stock Build 329..."
+        "$python_bin" "$patcher" "$stock_bin" "$fr_bin" || {
+            echo "FATAL: could not patch futurerestore for the iOS 16.4 path."
+            return 1
+        }
+    fi
+
+    if ! "$fr_bin" -h >/dev/null 2>&1; then
+        echo "FATAL: patched futurerestore cannot run on this Mac: $fr_bin"
+        return 1
+    fi
+    # v12 recovery + --use-pwndfu + --no-ibss fallthrough (NOP at 0xC2A0).
+    patch_word=$(xxd -p -s 0xC2A0 -l 4 "$fr_bin" 2>/dev/null | tr -d '\n' || true)
+    if [[ "$patch_word" != "1f2003d5" ]]; then
+        echo "Rebuilding usbliter8 futurerestore (patch marker mismatch: 0xC2A0=$patch_word)..."
+        "$python_bin" "$patcher" "$stock_bin" "$fr_bin" || {
+            echo "FATAL: $fr_bin is not the usbliter8-patched build (0xC2A0=$patch_word)."
+            return 1
+        }
+        patch_word=$(xxd -p -s 0xC2A0 -l 4 "$fr_bin" 2>/dev/null | tr -d '\n' || true)
+        [[ "$patch_word" == "1f2003d5" ]] || {
+            echo "FATAL: patched futurerestore still missing v12 marker at 0xC2A0."
+            return 1
+        }
+    fi
+    echo "Using usbliter8-patched futurerestore for the iOS 16.4 Odysseus path."
+}
+
+stage_ios164_futurerestore_iboot(){
+
+    local restoredir="$1"
+    local shsh_path="$2"
+    local board="$BOARDID"
+    local build="20E247"
+    local stage_dir="/tmp/futurerestore"
+    local im4m_path img4tool_bin
+    local python_bin="${LITER8_PYTHON:-python3}"
+    local ibss_bin="$restoredir/ibss.patched.bin"
+    local ibec_bin="$restoredir/ibec.patched.bin"
+    local ibss_img4="$stage_dir/ibss.${board}.${build}.patched.img4"
+    local ibec_img4="$stage_dir/ibec.${board}.${build}.patched.img4"
+    [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && python_bin="$SCRIPT_DIR/.venv/bin/python"
+
+    [[ -s "$ibss_bin" && -s "$ibec_bin" && -s "$shsh_path" ]] || {
+        echo "FATAL: cannot stage iOS 16.4 iBSS/iBEC for futurerestore."
+        return 1
+    }
+
+    img4tool_bin="$SCRIPT_DIR/bin/img4tool"
+    [[ -x "$img4tool_bin" ]] || {
+        echo "FATAL: missing img4tool for iOS 16.4 iBoot staging."
+        return 1
+    }
+
+    mkdir -p "$stage_dir"
+    im4m_path=$(mktemp "${TMPDIR:-/tmp}/surreal-ios164-im4m.XXXXXX")
+    # Extract IM4M from the live SHSH for personalizing the staged bootloaders.
+    if ! "$img4tool_bin" -e -s "$shsh_path" -m "$im4m_path" >/dev/null 2>&1; then
+        # Fallback: some builds store ApImg4Ticket as the IM4M payload.
+        if ! "$python_bin" - "$shsh_path" "$im4m_path" <<'PY'
+import plistlib, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, "rb") as f:
+    blob = plistlib.load(f)
+ticket = blob.get("ApImg4Ticket") or blob.get("APTicket")
+if not ticket:
+    raise SystemExit("no ApImg4Ticket in shsh")
+open(dst, "wb").write(ticket)
+PY
+        then
+            rm -f "$im4m_path"
+            echo "FATAL: could not extract IM4M from SHSH for iBoot staging."
+            return 1
+        fi
+    fi
+    [[ -s "$im4m_path" ]] || {
+        rm -f "$im4m_path"
+        echo "FATAL: extracted IM4M is empty."
+        return 1
+    }
+
+    local tmp_im4p tag src_bin dst_img4
+    for tag in ibss ibec; do
+        if [[ $tag == ibss ]]; then
+            src_bin="$ibss_bin"
+            dst_img4="$ibss_img4"
+        else
+            src_bin="$ibec_bin"
+            dst_img4="$ibec_img4"
+        fi
+        tmp_im4p="${dst_img4%.img4}.im4p"
+        if ! "$img4tool_bin" -c "$tmp_im4p" -t "$tag" "$src_bin" >/dev/null; then
+            rm -f "$im4m_path"
+            echo "FATAL: img4tool failed creating $tag im4p"
+            return 1
+        fi
+        if ! "$img4tool_bin" -c "$dst_img4" -p "$tmp_im4p" -m "$im4m_path" >/dev/null; then
+            rm -f "$im4m_path"
+            echo "FATAL: img4tool failed wrapping $tag img4"
+            return 1
+        fi
+        if [[ ! -s "$dst_img4" ]]; then
+            rm -f "$im4m_path"
+            echo "FATAL: staged $tag img4 is empty"
+            return 1
+        fi
+        echo "Staged $tag for futurerestore: $dst_img4"
+    done
+    rm -f "$im4m_path"
+}
+
+make_custom_ipsw_ios164(){
+
+    # Target-based custom IPSW + Odysseus sidecars (rdsk/rkrn + patched iBSS/iBEC).
+    # Hybrid base (26.x) archives leave ProductVersion 26.x and stock base iBEC in
+    # the restore path, which fails Recovery→Restore with "Unable to place device
+    # into restore mode". The proven A13 path uses the 16.4 IPSW, external --rdsk
+    # / --rkrn, --use-pwndfu --no-ibss --skip-blob, and a usbliter8-patched FR.
+
+    local python_bin="${LITER8_PYTHON:-python3}"
+    local ibss_key ibec_key
+    local target_ramdisk_rel target_trustcache_rel
+    local restore_ramdisk_dmg target_trustcache_path
+
+    if [[ -z "${IOS164_TARGET_IDENTITY:-}" ]]; then
+        prepare_ios164_build_inputs "$IPSW_PATH" "$IPSW_PATH_LATEST"
+    fi
+
+    ibss_key=$(grep '^ibss-16.4:' "$KEY_FILE" | cut -d':' -f2 | xargs)
+    ibec_key=$(grep '^ibec-16.4:' "$KEY_FILE" | cut -d':' -f2 | xargs)
+    [[ "$ibss_key" =~ ^[0-9A-Fa-f]{96}$ ]] || {
+        echo "FATAL: missing iBSS 16.4 key in $KEY_FILE"
+        exit 1
+    }
+    [[ "$ibec_key" =~ ^[0-9A-Fa-f]{96}$ ]] || {
+        echo "FATAL: missing iBEC 16.4 key in $KEY_FILE"
+        exit 1
+    }
+    [[ -f "$SCRIPT_DIR/tools/patch_iboot_semantic.py" && -f "$SCRIPT_DIR/tools/iboot_patchfinder.py" ]] || {
+        echo "FATAL: missing tools/patch_iboot_semantic.py or tools/iboot_patchfinder.py"
+        exit 1
+    }
+
+    mkdir -p restorefiles "$restoredir" boot "boot/$IDENTIFIER" "boot/$IDENTIFIER/$VERSION" work
+    rm -rf tmp1 tmp2
+    echo "Extracting iOS 16.4 target IPSW..."
+    unzip -q "$IPSW_PATH" -d tmp1
+    echo "Extracting signed base IPSW (carrier reference only)..."
+    unzip -q "$IPSW_PATH_LATEST" -d tmp2
+    chmod -R u+w tmp1 tmp2
+
+    target_ramdisk_rel="$IOS164_TARGET_RAMDISK"
+    target_trustcache_rel="$IOS164_TARGET_TRUSTCACHE"
+    restore_ramdisk_dmg="tmp1/$target_ramdisk_rel"
+    target_trustcache_path="tmp1/$target_trustcache_rel"
+    [[ -s "tmp1/$IOS164_TARGET_KERNEL" && -s "$restore_ramdisk_dmg" && -s "$target_trustcache_path" ]] || {
+        echo "FATAL: iOS 16.4 target components missing after extract"
+        exit 1
+    }
+    [[ -s "tmp1/Firmware/dfu/$IBSS" && -s "tmp1/Firmware/dfu/$IBEC" ]] || {
+        echo "FATAL: iOS 16.4 target iBSS/iBEC missing after extract"
+        exit 1
+    }
+
+    echo "Patching iOS 16.4 iBSS (liter8 handoff) and iBEC (restore entry)..."
+    "$IOS164_IMG4" -i "tmp1/Firmware/dfu/$IBSS" -o work/iBSS.raw -k "$ibss_key"
+    "$IOS164_IMG4" -i "tmp1/Firmware/dfu/$IBEC" -o work/iBEC.raw -k "$ibec_key"
+    "$python_bin" "$SCRIPT_DIR/tools/patch_iboot_semantic.py" \
+        work/iBSS.raw work/iBSS.patch \
+        --mode ibss --patchfinder "$SCRIPT_DIR/tools/iboot_patchfinder.py"
+    "$python_bin" "$SCRIPT_DIR/tools/patch_iboot_semantic.py" \
+        work/iBEC.raw work/iBEC.patch \
+        --mode ibec --patchfinder "$SCRIPT_DIR/tools/iboot_patchfinder.py"
+    # liter8 restore handoff uses the semantic iBSS patch; local-boot packaging is best-effort.
+    cp work/iBSS.patch "boot/$IDENTIFIER/iBSS.patch"
+    cp work/iBSS.patch "boot/$IDENTIFIER/$VERSION/iBSS.patch"
+    cp work/iBSS.patch "$restoredir/ibss.patched.bin"
+    cp work/iBEC.patch "$restoredir/ibec.patched.bin"
+    if ./bin/iBootpatch2 work/iBSS.patch "boot/$IDENTIFIER/$VERSION/iBSS.boot" 2>/dev/null; then
+        :
+    else
+        cp work/iBSS.patch "boot/$IDENTIFIER/$VERSION/iBSS.boot"
+    fi
+    echo "iOS 16.4: leaving stock target iBSS/iBEC inside custom.ipsw (Odysseus uses staged patched copies)."
+
+    echo "Patching iOS 16.4 kernel..."
+    "$IOS164_IMG4" -i "tmp1/$IOS164_TARGET_KERNEL" -o work/kernel.raw
+    "$python_bin" ./bin/patch_ios164_kernel.py \
+        work/kernel.raw work/kernelboot.patch \
+        --kernel64-patcher ./bin/Kernel64Patcher3
+    ./bin/kerneldiff work/kernel.raw work/kernelboot.patch work/kernelboot.diff
+    # Build krnl (NAND flash) and rkrn (restore entry) from the stock im4p + same diff.
+    "$IOS164_IMG4" -i "tmp1/$IOS164_TARGET_KERNEL" -o work/kernel.krnl.im4p \
+        -T krnl -J -P work/kernelboot.diff
+    "$IOS164_IMG4" -i "tmp1/$IOS164_TARGET_KERNEL" -o work/kernel.rkrn.im4p \
+        -T rkrn -J -P work/kernelboot.diff
+    [[ -s work/kernel.krnl.im4p && -s work/kernel.rkrn.im4p ]] || {
+        echo "FATAL: failed to repack patched iOS 16.4 kernels"
+        exit 1
+    }
+    cp work/kernel.krnl.im4p "tmp1/$IOS164_TARGET_KERNEL"
+    cp work/kernel.rkrn.im4p "$restoredir/kernel.im4p"
+
+    echo "Patching iOS 16.4 restore ramdisk (asr + libimg4 + trustcache)..."
+    ./bin/patch_ios164_ramdisk.sh \
+        "$restore_ramdisk_dmg" work/ramdisk.raw work \
+        "$IOS164_IMG4" ./bin/asr64_patcher ./bin/libimg4_patcher ./bin/ldid
+    [[ -s work/asr_patched && -s work/libimg4.patch ]] || {
+        echo "FATAL: iOS 16.4 trust-cache inputs are missing"
+        exit 1
+    }
+    "$IOS164_IMG4" -i "$target_trustcache_path" -o work/trustcache.raw || exit 1
+    cp work/trustcache.raw work/trustcache.stock.raw
+    ./bin/trustcache append work/trustcache.raw work/asr_patched || exit 1
+    ./bin/trustcache append work/trustcache.raw work/libimg4.patch || exit 1
+    "$IOS164_IMG4" -i work/trustcache.raw -o "$target_trustcache_path" -A -T rtsc || exit 1
+    [[ -s work/trustcache.raw && -s "$target_trustcache_path" ]] &&
+    ! cmp -s work/trustcache.stock.raw work/trustcache.raw || {
+        echo "FATAL: iOS 16.4 RestoreTrustCache injection failed"
+        exit 1
+    }
+    "$IOS164_IMG4" -i work/ramdisk.raw -o "$restore_ramdisk_dmg" -A -T rdsk
+    cp "$restore_ramdisk_dmg" "$restoredir/ramdisk.im4p"
+
+    echo "Packing target-based custom.ipsw (ProductVersion 16.4)..."
+    (
+        cd tmp1
+        zip -0 -r ../custom.ipsw ./*
+    )
+    validate_ios164_archive_boot_components custom.ipsw "$IPSW_PATH_LATEST" || {
+        rm -f custom.ipsw
+        rm -rf tmp1 tmp2 work
+        exit 1
+    }
+    mv -v custom.ipsw "$restoredir/custom.ipsw"
+    rm -rf tmp1 tmp2 work
+    echo "iOS 16.4 Odysseus bundle ready in $restoredir"
+    ls -la "$restoredir"
+}
+
 make_custom_ipsw_a12_ios14(){
+
+if [[ $VERSION == 16.4 ]]; then
+    make_custom_ipsw_ios164
+    return
+fi
 
 local ios164_base_ibec_path=""
 
@@ -3129,11 +3440,7 @@ fi
 
 if [[ $VERSION == 16.4 ]]; then
     prepare_ios164_build_inputs "$IPSW_PATH" "$IPSW_PATH_LATEST"
-    if [[ ! -x ./futurerestore/futurerestore ]] ||
-       ! ./futurerestore/futurerestore -h >/dev/null 2>&1; then
-        echo "FATAL: futurerestore is missing or cannot run on this Mac."
-        exit 1
-    fi
+    ensure_ios164_futurerestore || exit 1
 fi
 
 	dfu_helper_a11
@@ -3182,7 +3489,7 @@ else
     echo "Restore files already exist"
     restorefiles_remake=""
     if [[ $VERSION == 16.4 ]] && ! validate_ios164_archive_boot_components "$restoredir/custom.ipsw" "$IPSW_PATH_LATEST"; then
-        echo "The existing iOS 16.4 artifact is invalid and will be rebuilt."
+        echo "The existing iOS 16.4 artifact is invalid (likely a hybrid 26.x archive) and will be rebuilt."
         restorefiles_remake="Y"
     fi
     if [[ $IDENTIFIER == iPhone12,3 && $VERSION != 16.4 ]]; then
@@ -3203,7 +3510,7 @@ else
         read -p "Would you like to make new ones? (y/n): " restorefiles_remake
     fi
     if [[ $restorefiles_remake == Y || $restorefiles_remake == y ]]; then
-        if [[ $IDENTIFIER == iPhone12,3 && -d $restoredir ]]; then
+        if [[ ($IDENTIFIER == iPhone12,3 || $VERSION == 16.4) && -d $restoredir ]]; then
             restorefiles_backup="${restoredir}.backup-$(date +%Y%m%d-%H%M%S)"
             echo "Preserving existing restore files at: $restorefiles_backup"
             mv "$restoredir" "$restorefiles_backup"
@@ -3223,6 +3530,11 @@ if [[ $VERSION == 16.4 ]]; then
     boot_ibss_path="boot/$IDENTIFIER/$VERSION/iBSS.patch"
     [[ -s "$boot_ibss_path" ]] || {
         echo "FATAL: missing versioned iOS 16.4 restore iBSS: $boot_ibss_path"
+        exit 1
+    }
+    [[ -s "$restoredir/ramdisk.im4p" && -s "$restoredir/kernel.im4p" ]] || {
+        echo "FATAL: missing iOS 16.4 --rdsk/--rkrn artifacts in $restoredir"
+        echo "Rebuild restore files (answer y when prompted)."
         exit 1
     }
 fi
@@ -3310,6 +3622,40 @@ local max_restore_attempts=3
 local attempt_log=""
 local tee_exit_code=0
 local -a pipe_status=()
+local fr_bin="./futurerestore/futurerestore"
+local -a fr_args=()
+local fr_cache=""
+if [[ $VERSION == 16.4 ]]; then
+    ensure_ios164_futurerestore || exit 1
+    fr_bin="./futurerestore/futurerestore-usbliter8"
+    stage_ios164_futurerestore_iboot "$restoredir" "$SHSH_PATH" || exit 1
+    fr_cache="${TMPDIR:-/tmp}/surrealra1n-fr-cache-${IOS164_BASE_BUILD}"
+    mkdir -p "$fr_cache"
+    # Proven A13 tethered path: live liter8 Recovery + Odysseus flags + external rdsk/rkrn.
+    # Do NOT pass plain stock FR against a hybrid 26.x archive — that is the
+    # "Unable to place device into restore mode" failure mode from beta22 logs.
+    fr_args=(
+        -t "$SHSH_PATH"
+        --latest-sep
+        --use-pwndfu
+        --no-ibss
+        --skip-blob
+        --rdsk "$restoredir/ramdisk.im4p"
+        --rkrn "$restoredir/kernel.im4p"
+        --custom-latest-buildid "$IOS164_BASE_BUILD"
+    )
+    # Expand baseband flag into the array (may be --no-baseband or --latest-baseband).
+    # shellcheck disable=SC2206
+    fr_args+=($updatebb_flag)
+    [[ -n "${rsep_flag:-}" ]] && fr_args+=($rsep_flag)
+    fr_args+=("$restoredir/custom.ipsw")
+    echo "iOS 16.4 Odysseus futurerestore argv:"
+    printf '  %q' "$fr_bin"
+    printf ' %q' "${fr_args[@]}"
+    printf '\n'
+else
+    fr_args=(-t "$SHSH_PATH" $rsep_flag --latest-sep $updatebb_flag "$restoredir/custom.ipsw")
+fi
 while true; do
     restore_attempt=$((restore_attempt + 1))
     attempt_log=$(mktemp "${TMPDIR:-/tmp}/surrealra1n-futurerestore.XXXXXX") || {
@@ -3317,8 +3663,15 @@ while true; do
         exit 1
     }
     set +e
-    sudo ./futurerestore/futurerestore -t "$SHSH_PATH" $rsep_flag --latest-sep \
-        $updatebb_flag "$restoredir/custom.ipsw" 2>&1 | tee -a "$restore_log" "$attempt_log"
+    if [[ $VERSION == 16.4 ]]; then
+        sudo env \
+            HOME="$HOME" \
+            TMPDIR="$fr_cache" \
+            FUTURERESTORE_I_SOLEMNLY_SWEAR_THAT_I_AM_UP_TO_NO_GOOD=1 \
+            "$fr_bin" "${fr_args[@]}" 2>&1 | tee -a "$restore_log" "$attempt_log"
+    else
+        sudo "$fr_bin" "${fr_args[@]}" 2>&1 | tee -a "$restore_log" "$attempt_log"
+    fi
     pipe_status=("${PIPESTATUS[@]}")
     EXIT_CODE=${pipe_status[0]}
     tee_exit_code=${pipe_status[1]}
@@ -3352,6 +3705,11 @@ if [[ $EXIT_CODE -eq 0 ]]; then
     exit 0
 else
     echo "futurerestore failed with exit code $EXIT_CODE"
+    if [[ $VERSION == 16.4 ]]; then
+        echo "iOS 16.4 tip: stay in post-iBSS Recovery (do not reboot) between liter8 and FR."
+        echo "If NONC changed, re-pwn DFU and re-run Start Restore so a fresh ticket is minted."
+        echo "Full log: $restore_log"
+    fi
     exit 1
 fi
 
@@ -4045,10 +4403,6 @@ ios164_build(){
     fi
     make_custom_ipsw_a12_ios14
 
-    [[ -s "boot/$IDENTIFIER/$VERSION/iBSS.boot" ]] || {
-        echo "Build failed: missing local-boot iBSS"
-        exit 1
-    }
     [[ -s "boot/$IDENTIFIER/$VERSION/iBSS.patch" ]] || {
         echo "Build failed: missing versioned restore iBSS"
         exit 1
@@ -4057,9 +4411,17 @@ ios164_build(){
         echo "Build failed: missing custom IPSW"
         exit 1
     }
-    echo "Build complete: boot/$IDENTIFIER/$VERSION/iBSS.boot"
+    for f in ramdisk.im4p kernel.im4p ibss.patched.bin ibec.patched.bin; do
+        [[ -s "$restoredir/$f" ]] || {
+            echo "Build failed: missing Odysseus artifact $restoredir/$f"
+            exit 1
+        }
+    done
+    echo "Build complete: boot/$IDENTIFIER/$VERSION/iBSS.patch"
     echo "Build complete: $restoredir/custom.ipsw"
+    echo "Build complete: $restoredir/ramdisk.im4p + kernel.im4p + patched iBSS/iBEC"
     echo "No device state was changed. Use the normal restore flow only after reviewing the generated artifacts."
+    echo "Note: existing hybrid 26.x custom.ipsw archives are invalid for this path and will be auto-rebuilt."
 }
 
 main_menu(){

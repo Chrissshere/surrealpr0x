@@ -4,7 +4,7 @@ A tethered downgrade tool for some A7/A8(X) devices, all A11 devices and A12/A13
 
 ## Experimental iOS 16.4 beta builder
 
-Build a local iOS 16.4 bundle with:
+Build a local iOS 16.4 Odysseus bundle with:
 
 ```bash
 ./surrealra1n.sh ios164-build <target-identifier> <target.ipsw> <base.ipsw>
@@ -21,16 +21,18 @@ Requirements:
   - `iPhone12,5` — iPhone 11 Pro Max
   - `iPhone12,8` — iPhone SE (2nd generation)
 - `<target.ipsw>` must be the iOS 16.4 (20E247) IPSW for that identifier.
-- `<base.ipsw>` must be the iOS 26.5.2 (23F84) IPSW for that same identifier.
-- The builder requires macOS 10.15 or newer. Apple Silicon Macs use Rosetta for x86_64 helper tools.
+- `<base.ipsw>` must be the iOS 26.5.2 (23F84) IPSW for that same identifier (carrier/SEP ticket source).
+- **Apple Silicon Mac required** for the 16.4 restore handoff (usbliter8 FR patches are arm64-only).
+- The builder requires macOS 10.15 or newer. Some helper tools still use Rosetta on Apple Silicon.
 - If an archive includes helpers built on another Mac CPU, the builder rebuilds its iOS 16.4 helpers for the current host.
 
 The builder validates both IPSWs and resolves their matching erase identities
-before building. It creates the local-boot iBSS payload and custom restore IPSW
-without communicating with a connected phone. iPhone 11, 11 Pro, and 11 Pro Max
-keep the futurerestore test route; iPhone SE (2nd generation) keeps its existing
-idevicerestore test route. All device paths remain experimental and require
-separate package and hardware validation.
+before building. It produces a **target-based** custom IPSW (ProductVersion 16.4)
+plus Odysseus sidecars (`ramdisk.im4p`, `kernel.im4p`, patched iBSS/iBEC). At
+restore time, surrealra1n boots patched iBSS with liter8, then runs a
+usbliter8-patched futurerestore with `--use-pwndfu --no-ibss --skip-blob
+--rdsk --rkrn --custom-latest-buildid 23F84`. Hybrid base (26.x) custom.ipsw
+archives from older betas are rejected and rebuilt automatically.
 
 The bundled kernel patchfinder is from usbliter8ra1n and is available under its
 MIT license in [tools/LICENSE.usbliter8ra1n](tools/LICENSE.usbliter8ra1n).

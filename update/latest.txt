@@ -1,9 +1,10 @@
-v2.0 beta 22
+v2.0 beta 23
 
 RELEASE NOTES:
 
-Add the experimental iOS 16.4 builder for supported A12 and A13 iPhones
-Validate the selected target and base IPSWs before building
-Document supported identifiers and beta install instructions
-Allow iOS 16.4 builds on Intel macOS and rebuild mismatched helper binaries
-Ignore stale update markers instead of blocking the menu
+Fix iOS 16.4 Recovery→Restore handoff (Unable to place device into restore mode)
+Switch the experimental 16.4 path to a target-based IPSW + Odysseus FR flags
+Build usbliter8-patched futurerestore from stock Build 329 at restore time
+Stage patched 16.4 iBSS/iBEC and pass external --rdsk/--rkrn/--skip-blob/--no-ibss
+Reject hybrid 26.x custom.ipsw archives that cannot enter restore mode on this path
+Add semantic iBoot patcher helpers for A12/A13 iOS 16.4

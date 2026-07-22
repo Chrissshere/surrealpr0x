@@ -12,3 +12,15 @@ ipsw/
 logs/
 restorefiles/
 shsh/
+tmp/
+tmp1/
+tmp2/
+work/
+# Downloaded / generated at runtime (stock + usbliter8-patched Build 329)
+futurerestore/futurerestore
+futurerestore/futurerestore-usbliter8
+futurerestore/*.zip
+futurerestore/*.tar.xz
+futurerestore/.futurerestore-arm64.tmp
+16.4/
+
