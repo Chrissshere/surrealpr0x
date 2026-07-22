@@ -1,4 +1,13 @@
 # Firmware Keys are sourced from the Apple Wiki
+# Format: ibss-<version>: <IV><Key> (hex concatenated)
+
+# iOS 16.4 (20E247 / SydneyE)
+ibss-16.4: 93fe6d8a0354c2884a58e235e3871a5e50b62bf0754a335f25aac6abaab2fd32c02a5f822ce959c77c5db9cd371321c5
+ibec-16.4: 0b6dc18a5c28224ffc21083dc7cedef856bf190440a4daa81bc1a9ec29a20169cd437e1f4ddd7c47ecac71e900572692
+
+# iOS 15.0 (19A346) — experimental; Rose may break restore / UWB
+ibss-15.0: e69482944a9e3ac79117755b72250ed3214294fca4e21feec3fad5fb343a67067da3b0f350102d952c912ee9ab2d2779
+ibec-15.0: 869687abd43696bf14d8c2e93d5225e7fd404d557d8c2d42161f62d68a0a260ae375701270f39229657aca1dc0f9bcd3
 
 ibss-15.6.1: 7b70cf0ee608799653abd418314473403ae8e93cb4754f9e682e2904c96b0c56562b86bf4364eceec7881c2510666cb3
 

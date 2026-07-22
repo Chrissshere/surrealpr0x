@@ -20,6 +20,25 @@ VERSION=""
 BUILD=""
 VERSION_LATEST=""
 outdated=""
+IOS164_BUILD_DEVICE=""
+IOS164_IMG4=""
+IOS164_TARGET_IDENTITY=""
+IOS164_BASE_IDENTITY=""
+IOS164_TARGET_VERSION=""
+IOS164_TARGET_BUILD=""
+IOS164_BASE_VERSION=""
+IOS164_BASE_BUILD="23F84"
+IOS164_TARGET_KERNEL=""
+IOS164_BASE_KERNEL=""
+IOS164_TARGET_OS=""
+IOS164_BASE_OS=""
+IOS164_TARGET_RAMDISK=""
+IOS164_BASE_RAMDISK=""
+IOS164_TARGET_TRUSTCACHE=""
+IOS164_BASE_TRUSTCACHE=""
+if [[ "${1:-}" == "ios164-build" && "${2:-}" == iPhone* ]]; then
+    IOS164_BUILD_DEVICE="$2"
+fi
 
 set -euo pipefail
 
@@ -57,14 +76,19 @@ error_handler() {
 trap 'error_handler $LINENO' ERR
 
 echo "Your surrealra1n version: $CURRENT_VERSION"
-# Request sudo password upfront
-echo "Enter your user password when prompted to"
-sudo -v || exit 1
+if [[ "${1:-}" == "ios164-build" ]]; then
+    # Do not use sudo or clear temporary files before validation.
+    echo "iOS 16.4 build-only mode: no sudo and no device changes."
+else
+    # Request sudo for the legacy interactive workflow.
+    echo "Enter your user password when prompted to"
+    sudo -v || exit 1
 
-sudo rm -rf "tmp"
-sudo rm -rf "tmp1"
-sudo rm -rf "tmp2"
-sudo rm -rf "work"
+    sudo rm -rf "tmp"
+    sudo rm -rf "tmp1"
+    sudo rm -rf "tmp2"
+    sudo rm -rf "work"
+fi
 
 dist=0
 
@@ -345,11 +369,14 @@ require_dir() {
 
 #
 
-echo "Checking for updates..."
-rm -rf update/latest.txt
-curl -L -o update/latest.txt https://github.com/pwnerblu/surrealra1n/raw/refs/heads/development/update/latest.txt
-LATEST_VERSION=$(head -n 1 "update/latest.txt" | tr -d '\r\n')
-RELEASE_NOTES=$(awk '/^RELEASE NOTES:/{flag=1; next} flag' "update/latest.txt")
+if [[ "${1:-}" == "ios164-build" ]]; then
+    echo "Skipping update prompt in build-only mode."
+else
+    echo "Checking for updates..."
+    rm -rf update/latest.txt
+    curl -L -o update/latest.txt https://github.com/pwnerblu/surrealra1n/raw/refs/heads/development/update/latest.txt
+    LATEST_VERSION=$(head -n 1 "update/latest.txt" | tr -d '\r\n')
+    RELEASE_NOTES=$(awk '/^RELEASE NOTES:/{flag=1; next} flag' "update/latest.txt")
 
 if [[ $LATEST_VERSION != $CURRENT_VERSION ]]; then
     echo "A new version of surrealra1n is available: $LATEST_VERSION"
@@ -395,6 +422,7 @@ else
     echo "surrealra1n is up to date."
     sleep 1
 fi
+fi
 
 echo "Checking for existing binaries..."
 
@@ -414,7 +442,12 @@ if [[ -f "./bin/img4" && \
       -f "./bin/pzb" && \
       -f "./bin/zenity" && \
       -f "./bin/iBoot64Patcher" && \
+      -f "./bin/iBootPatch" && \
+      -f "./bin/iBootpatch2" && \
       -f "./bin/asr64_patcher" && \
+      -f "./bin/libimg4_patcher" && \
+      -f "./bin/Kernel64Patcher3" && \
+      -f "./bin/trustcache" && \
       -f "./bin/ipx_restored_patcher" && \
       -f "./bin/restored_external64_patcher" && \
       -f "./bin/restoredpatcher" && \
@@ -734,22 +767,39 @@ else
 fi
 
 echo "Checking for dependencies that are required for usbliter8ctl, assuming Python3 is on your system"
-# Check required packages
-PACKAGES=("pyusb")
-for pkg in "${PACKAGES[@]}"; do
-    if pip3 show "$pkg" &>/dev/null; then
-        version=$(pip3 show "$pkg" | grep Version | awk '{print $2}')
-        echo "$pkg: $version"
-    else
-        echo "$pkg not installed"
-        echo "Running: pip3 install $pkg"
-        if pip3 install "$pkg" 2>&1 | grep -q "externally-managed"; then
-            echo "Externally managed environment detected, retrying with --break-system-packages"
-            pip3 install "$pkg" --break-system-packages
+# Use a local virtual environment so pyusb works on macOS.
+LITER8_PYTHON="python3"
+if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    LITER8_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+elif [[ -x "./.venv/bin/python" ]]; then
+    LITER8_PYTHON="./.venv/bin/python"
+fi
+if ! "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
+    echo "pyusb missing for: $LITER8_PYTHON"
+    echo "Creating local .venv and installing pyusb..."
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -m venv "$SCRIPT_DIR/.venv" 2>/dev/null || true
+        if [[ -x "$SCRIPT_DIR/.venv/bin/pip" ]]; then
+            "$SCRIPT_DIR/.venv/bin/pip" install -q pyusb || true
+            LITER8_PYTHON="$SCRIPT_DIR/.venv/bin/python"
         fi
     fi
-done
+fi
+if "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
+    echo "pyusb: ok ($LITER8_PYTHON)"
+else
+    echo "WARNING: pyusb still missing. liter8ctl will fail to boot iBSS on A12/A13."
+    echo "Fix:  cd surrealra1n && python3 -m venv .venv && .venv/bin/pip install pyusb"
+fi
 
+if [[ -n "$IOS164_BUILD_DEVICE" ]]; then
+    # An explicit build target does not need a connected phone.
+    IDENTIFIER="$IOS164_BUILD_DEVICE"
+    MODE="Build-only"
+    ECID="not-required"
+    SERIAL="not-required"
+    DEVICE_VERSION="not-required"
+else
 IDEVICE_INFO=$(ideviceinfo 2>&1) || true
 IDEVICE_STATUS=$?
 if [[ $IDEVICE_STATUS -eq 0 && "$IDEVICE_INFO" != *"No device found!"* && "$IDEVICE_INFO" != *"ERROR:"* ]]; then
@@ -795,11 +845,19 @@ else
         NAME="No device"
     fi
 fi
+fi
 
 if [[ -d "seprmvr64boot" ]]; then
     mkdir -p boot
     mv -v seprmvr64boot/* boot/
     rm -rf "seprmvr64boot"
+fi
+
+# The build command can use an explicit target without a connected phone.
+if [[ -n "$IOS164_BUILD_DEVICE" ]]; then
+    IDENTIFIER="$IOS164_BUILD_DEVICE"
+    MODE="Build-only"
+    ECID="not-required"
 fi
 
 if [[ $IDENTIFIER == iPad4,7 || $IDENTIFIER == iPad4,8 || $IDENTIFIER == iPad4,9 ]]; then
@@ -1187,9 +1245,25 @@ ECID: $ECID
 
 Device is in $MODE mode."
 
-if [[ $IDENTIFIER == iPhone12,3 ]]; then
-    echo "iPhone 11 Pro currently has issues, thus it is Not supported"
-    exit 1
+# iPhone 11 Pro support is still experimental.
+if [[ $IDENTIFIER == iPhone12,3 && "${1:-}" != "ios164-build" ]]; then
+    echo
+    echo "================================================================"
+    echo " WARNING: iPhone 11 Pro (iPhone12,3) is EXPERIMENTAL"
+    echo "================================================================"
+    echo " Expected “least unlikely” range: iOS 15.4 – 15.6.1"
+    echo " 15.0 can be forced if keys exist (Rose gate) — still experimental"
+    echo " Requires: usbliter8 + Pi Pico (or equivalent) to pwn A13"
+    echo " Success is uncommon; bricks / restore loops are possible."
+    echo " Keys in tree: 15.0 + 15.4 / 15.4.1 / 15.5 / 15.6 / 15.6.1"
+    echo "================================================================"
+    read -p "Continue anyway at your own risk? (y/N): " iphone12_3_confirm
+    if [[ $iphone12_3_confirm != y && $iphone12_3_confirm != Y ]]; then
+        echo "Aborted. Use another device or wait for upstream support."
+        exit 1
+    fi
+    echo "Proceeding with iPhone 11 Pro experimental path..."
+    echo
 fi
 
 misc_utils(){
@@ -2009,7 +2083,7 @@ if [[ $IDENTIFIER == iPhone10* ]]; then
     ./bin/asr64_patcher work/asr work/asr_patched
     ./bin/ldid -e work/asr > work/ents.plist
     ./bin/ldid -Swork/ents.plist work/asr_patched
-    ./bin/hfsplus work/ramdisk.raw rm usr/sbin/asr 
+    ./bin/hfsplus work/ramdisk.raw rm usr/sbin/asr
     ./bin/hfsplus work/ramdisk.raw add work/asr_patched usr/sbin/asr
     ./bin/hfsplus work/ramdisk.raw chmod 100755 usr/sbin/asr
     ./bin/hfsplus work/ramdisk.raw extract usr/lib/libimg4.dylib work/libimg4.dylib
@@ -2038,6 +2112,10 @@ rm -rf "work"
 
 make_custom_ipsw_a12_ios14(){
 
+if [[ $VERSION == 16.4 && -z "${IOS164_TARGET_IDENTITY:-}" ]]; then
+    prepare_ios164_build_inputs "$IPSW_PATH" "$IPSW_PATH_LATEST"
+fi
+
 IBSS_KEY=$(grep "ibss-$VERSION:" "$KEY_FILE" | cut -d':' -f2 | xargs)
 mkdir -p restorefiles
 mkdir -p restorefiles/$IDENTIFIER
@@ -2047,9 +2125,13 @@ mkdir -p boot/$IDENTIFIER
 mkdir -p boot/$IDENTIFIER/$VERSION
 unzip "$IPSW_PATH" -d tmp1
 unzip "$IPSW_PATH_LATEST" -d tmp2
+if [[ -n "$IOS164_BUILD_DEVICE" ]]; then
+    # Make the temporary base tree writable.
+    chmod -R u+w tmp2
+fi
 mkdir -p work
 # iBSS patching of course because yes
-if [[ $VERSION == 14.0 ]] && [[ $BUILD != 18A373 ]]; then
+    if [[ $VERSION == 14.0 ]] && [[ $BUILD != 18A373 ]]; then
     if [[ $IDENTIFIER == iPhone11,8 ]]; then
         ipsw_url="https://updates.cdn-apple.com/2020SummerFCS/fullrestores/001-46828/6A00C15C-8AEB-490E-A468-04E28C68E7C9/iPhone11,8,iPhone12,1_14.0_18A373_Restore.ipsw"
     elif [[ $IDENTIFIER == iPhone11,2 || $IDENTIFIER == iPhone11,4 || $IDENTIFIER == iPhone11,6 ]]; then
@@ -2081,10 +2163,24 @@ elif [[ $VERSION == 14.5* || $VERSION == 14.6* || $VERSION == 14.7* || $VERSION 
     ./bin/iBoot64Patcher2 work/iBSS.raw work/iBSS.patchboot -b "-v"
     ./bin/iBootpatch2 work/iBSS.patchboot boot/$IDENTIFIER/$VERSION/iBSS.boot
     ./bin/img4 -i boot/$IDENTIFIER/iBSS.patch -o tmp2/Firmware/dfu/$IBEC -A -T ibec
-elif [[ $VERSION == 15.* ]]; then
-    ./bin/img4 -i tmp1/Firmware/dfu/$IBSS -o work/iBSS.raw -k $IBSS_KEY
-    ./bin/iBootPatch work/iBSS.raw boot/$IDENTIFIER/iBSS.patch
-    ./bin/iBootPatch work/iBSS.raw work/iBSS.patchboot 
+    elif [[ $VERSION == 15.* || $VERSION == 16.4 ]]; then
+        ./bin/img4 -i tmp1/Firmware/dfu/$IBSS -o work/iBSS.raw -k $IBSS_KEY
+        ./bin/iBootPatch work/iBSS.raw boot/$IDENTIFIER/iBSS.patch
+        ./bin/iBootPatch work/iBSS.raw work/iBSS.patchboot
+        if [[ $VERSION == 16.4 ]]; then
+            [[ -s boot/$IDENTIFIER/iBSS.patch && -s work/iBSS.patchboot ]] || {
+                echo "iOS 16.4 iBSS patch output is missing"
+                exit 1
+            }
+            cmp -s work/iBSS.raw boot/$IDENTIFIER/iBSS.patch && {
+                echo "iOS 16.4 iBSS patch made no changes"
+                exit 1
+            }
+            cmp -s work/iBSS.raw work/iBSS.patchboot && {
+                echo "iOS 16.4 local boot iBSS patch made no changes"
+                exit 1
+            }
+        fi
     ./bin/iBootpatch2 work/iBSS.patchboot boot/$IDENTIFIER/$VERSION/iBSS.boot
     ./bin/img4 -i boot/$IDENTIFIER/iBSS.patch -o tmp2/Firmware/dfu/$IBEC -A -T ibec
 else
@@ -2125,7 +2221,32 @@ elif [[ $IDENTIFIER == iPhone11,4 || $IDENTIFIER == iPhone12,5 || $IDENTIFIER ==
 elif [[ $IDENTIFIER == iPhone11,6 ]]; then
     IDENTITY="2"
 fi
-sudo KERNEL2="$KERNEL2" IDENTITY="$IDENTITY" python3 <<'PY'
+
+if [[ $VERSION == 16.4 ]]; then
+    IDENTITY="$IOS164_BASE_IDENTITY"
+    fs_dmg="tmp1/$IOS164_TARGET_OS"
+    fs_dmg_18="tmp2/$IOS164_BASE_OS"
+    fs_dmg_name=${fs_dmg##*/}
+    fs_dmg_18_name=${fs_dmg_18##*/}
+    target_ramdisk_rel="$IOS164_TARGET_RAMDISK"
+    target_trustcache_rel="$IOS164_TARGET_TRUSTCACHE"
+    base_ramdisk_rel="$IOS164_BASE_RAMDISK"
+    base_trustcache_rel="$IOS164_BASE_TRUSTCACHE"
+    restore_ramdisk_dmg="tmp1/$target_ramdisk_rel"
+    restore_ramdisk_dmg_18="tmp2/$base_ramdisk_rel"
+    target_trustcache_path="tmp1/$target_trustcache_rel"
+    base_trustcache_path="tmp2/$base_trustcache_rel"
+    [[ -f "$fs_dmg" && -f "$fs_dmg_18" && -f "$restore_ramdisk_dmg" && -f "$restore_ramdisk_dmg_18" &&
+       -f "$target_trustcache_path" && -f "$base_trustcache_path" ]] || {
+        echo "FATAL: iOS 16.4 manifest paths are absent from an extracted IPSW"
+        exit 1
+    }
+    ramdisk_dmg_name=${restore_ramdisk_dmg##*/}
+    ramdisk_dmg_name_18=${restore_ramdisk_dmg_18##*/}
+fi
+manifest_python=(sudo python3)
+[[ -n "$IOS164_BUILD_DEVICE" ]] && manifest_python=(python3)
+KERNEL2="$KERNEL2" IDENTITY="$IDENTITY" "${manifest_python[@]}" <<'PY'
 import os
 import plistlib
 
@@ -2178,10 +2299,23 @@ if [[ $IDENTIFIER == iPhone12* ]]; then
 fi
 cp -v $fs_dmg $fs_dmg_18 # replace rootfs in the IPSW
 cp -v tmp1/Firmware/$fs_dmg_name.trustcache tmp2/Firmware/$fs_dmg_18_name.trustcache 
-cp -v tmp1/Firmware/$ramdisk_dmg_name.trustcache tmp2/Firmware/$ramdisk_dmg_name_18.trustcache
-./bin/img4 -i tmp1/$KERNEL -o work/kernel.raw
-if [[ $VERSION == 14.* ]]; then
-    ./bin/Kernel64Patcher3 work/kernel.raw work/kernelboot.patch -b # use kernel64patcher3, properly patch trust evaluation check on ios 14 arm64e
+if [[ $VERSION == 16.4 ]]; then
+    cp -v "$target_trustcache_path" "$base_trustcache_path"
+else
+    cp -v tmp1/Firmware/$ramdisk_dmg_name.trustcache tmp2/Firmware/$ramdisk_dmg_name_18.trustcache
+fi
+if [[ $VERSION == 16.4 ]]; then
+    "$IOS164_IMG4" -i tmp1/$KERNEL -o work/kernel.raw
+else
+    ./bin/img4 -i tmp1/$KERNEL -o work/kernel.raw
+fi
+    if [[ $VERSION == 16.4 ]]; then
+        # Use the verified 16.4 kernel patch set.
+        "$LITER8_PYTHON" ./bin/patch_ios164_kernel.py \
+            work/kernel.raw work/kernelboot.patch \
+            --kernel64-patcher ./bin/Kernel64Patcher3
+    elif [[ $VERSION == 14.* ]]; then
+        ./bin/Kernel64Patcher3 work/kernel.raw work/kernelboot.patch -b # use kernel64patcher3, properly patch trust evaluation check on ios 14 arm64e
 elif [[ $VERSION == 13.* ]]; then
     ./bin/Kernel64Patcher3 work/kernel.raw work/kernelboot.patch -b13 -n # make booting take less time (added -b13 to hopefully fix haptics issue)
 else
@@ -2189,27 +2323,47 @@ else
 fi
 ./bin/kerneldiff work/kernel.raw work/kernelboot.patch work/kernelboot.diff
 rm -rf tmp2/$KERNEL
-./bin/img4 -i tmp1/$KERNEL -o tmp2/$KERNEL2 -T krnl -J -P work/kernelboot.diff || true
-./bin/KPlooshFinder work/kernel.raw work/kernel.patch
-./bin/kerneldiff work/kernel.raw work/kernel.patch work/kernel.diff
-./bin/img4 -i tmp1/$KERNEL -o tmp2/$KERNEL -T krnl -J -P work/kernel.diff || true
-./bin/img4 -i $restore_ramdisk_dmg -o work/ramdisk.raw
-./bin/hfsplus work/ramdisk.raw extract usr/sbin/asr work/asr
-./bin/asr64_patcher work/asr work/asr_patched
-./bin/ldid -e work/asr > work/ents.plist
-./bin/ldid -Swork/ents.plist work/asr_patched
-./bin/hfsplus work/ramdisk.raw rm usr/sbin/asr 
-./bin/hfsplus work/ramdisk.raw add work/asr_patched usr/sbin/asr
-./bin/hfsplus work/ramdisk.raw chmod 100755 usr/sbin/asr
-if [[ $VERSION == 14.* || $VERSION == 15.* ]]; then
-    ./bin/hfsplus work/ramdisk.raw extract usr/lib/libimg4.dylib work/libimg4.dylib
-    ./bin/libimg4_patcher work/libimg4.dylib work/libimg4.patch
-    ./bin/ldid -Swork/ents.plist work/libimg4.patch
-    ./bin/hfsplus work/ramdisk.raw rm usr/lib/libimg4.dylib 
-    ./bin/hfsplus work/ramdisk.raw add work/libimg4.patch usr/lib/libimg4.dylib
-    ./bin/hfsplus work/ramdisk.raw chmod 100755 usr/lib/libimg4.dylib
+if [[ $VERSION == 16.4 ]]; then
+    "$IOS164_IMG4" -i tmp1/$KERNEL -o tmp2/$KERNEL2 -T krnl -J -P work/kernelboot.diff
+else
+    ./bin/img4 -i tmp1/$KERNEL -o tmp2/$KERNEL2 -T krnl -J -P work/kernelboot.diff || true
 fi
-if [[ $VERSION == 15.* ]]; then
+if [[ $VERSION == 16.4 ]]; then
+    # Reuse the verified kernel output.
+    cp work/kernelboot.patch work/kernel.patch
+else
+    ./bin/KPlooshFinder work/kernel.raw work/kernel.patch
+fi
+./bin/kerneldiff work/kernel.raw work/kernel.patch work/kernel.diff
+if [[ $VERSION == 16.4 ]]; then
+    "$IOS164_IMG4" -i tmp1/$KERNEL -o tmp2/$KERNEL -T krnl -J -P work/kernel.diff
+else
+    ./bin/img4 -i tmp1/$KERNEL -o tmp2/$KERNEL -T krnl -J -P work/kernel.diff || true
+fi
+if [[ $VERSION == 16.4 ]]; then
+    # Use the macOS path for the 16.4 APFS ramdisk and verify it.
+    ./bin/patch_ios164_ramdisk.sh \
+        "$restore_ramdisk_dmg" work/ramdisk.raw work \
+        "$IOS164_IMG4" ./bin/asr64_patcher ./bin/libimg4_patcher ./bin/ldid
+else
+    ./bin/img4 -i $restore_ramdisk_dmg -o work/ramdisk.raw
+    ./bin/hfsplus work/ramdisk.raw extract usr/sbin/asr work/asr
+    ./bin/asr64_patcher work/asr work/asr_patched
+    ./bin/ldid -e work/asr > work/ents.plist
+    ./bin/ldid -Swork/ents.plist work/asr_patched
+    ./bin/hfsplus work/ramdisk.raw rm usr/sbin/asr
+    ./bin/hfsplus work/ramdisk.raw add work/asr_patched usr/sbin/asr
+    ./bin/hfsplus work/ramdisk.raw chmod 100755 usr/sbin/asr
+        if [[ $VERSION == 14.* || $VERSION == 15.* ]]; then
+            ./bin/hfsplus work/ramdisk.raw extract usr/lib/libimg4.dylib work/libimg4.dylib
+        ./bin/libimg4_patcher work/libimg4.dylib work/libimg4.patch
+        ./bin/ldid -Swork/ents.plist work/libimg4.patch
+        ./bin/hfsplus work/ramdisk.raw rm usr/lib/libimg4.dylib
+        ./bin/hfsplus work/ramdisk.raw add work/libimg4.patch usr/lib/libimg4.dylib
+        ./bin/hfsplus work/ramdisk.raw chmod 100755 usr/lib/libimg4.dylib
+    fi
+fi
+    if [[ $VERSION == 15.* ]]; then
     if [[ $restored == "restored_update" ]]; then
         ramdisk_download_name="018-80166-001.dmg"
     else
@@ -2224,34 +2378,82 @@ else
     fi
     ramdisk_url="https://updates.cdn-apple.com/2020SummerFCS/fullrestores/001-46617/B62CA88B-EB85-4A5A-9440-7E0B90B02006/iPhone10,3,iPhone10,6_14.0_18A373_Restore.ipsw"
 fi
-if [[ $IDENTIFIER == iPhone11* || $IDENTIFIER == iPhone12* ]] && [[ $IDENTIFIER != iPhone12,8 ]]; then
+    if [[ $VERSION == 16.4 ]]; then
+        # Keep the native 16.4 restore binary.
+        echo "iOS 16.4: retaining native restored_external"
+    elif [[ $IDENTIFIER == iPhone12,3 && $IPHONE12_3_BB_MODE == normal ]]; then
+    # Keep the native d421 restore binary for this mode.
+    ./bin/hfsplus work/ramdisk.raw extract usr/local/bin/$restored work/restored_external
+    "${LITER8_PYTHON:-python3}" ./bin/d421_restored_patcher.py \
+        work/restored_external work/restored_patch
+    if cmp -s work/restored_external work/restored_patch; then
+        echo "FATAL: native d421 restored patch produced no byte changes"
+        exit 1
+    fi
+elif [[ $IDENTIFIER == iPhone11* || $IDENTIFIER == iPhone12* ]] && [[ $IDENTIFIER != iPhone12,8 ]]; then
     sudo ./bin/pzb -g $ramdisk_download_name $ramdisk_url
     ./bin/img4 -i $ramdisk_download_name -o work/ramdisk2.raw
     sudo rm -rf $ramdisk_download_name
     ./bin/hfsplus work/ramdisk2.raw extract usr/local/bin/$restored work/restored_external
     ./bin/ipx_restored_patcher work/restored_external work/restored_patch
-    if [[ $IDENTIFIER == iPhone12,3 ]]; then
-        # skip baseband update on 11 Pro as apparantely that causes issue with a restore
+    if [[ $IDENTIFIER == iPhone12,3 && $IPHONE12_3_BB_MODE == workaround ]]; then
+        # Keep the upstream workaround for recovery testing.
         mv -v work/restored_patch work/restored_pat
         ./bin/restoredpatcher work/restored_pat work/restored_patch -b
     fi
+fi
+if [[ -f work/restored_patch ]]; then
     ./bin/ldid -e work/restored_external > work/ents.plist
     ./bin/ldid -Swork/ents.plist work/restored_patch
     ./bin/hfsplus work/ramdisk.raw rm usr/local/bin/$restored
     ./bin/hfsplus work/ramdisk.raw add work/restored_patch usr/local/bin/$restored
     ./bin/hfsplus work/ramdisk.raw chmod 100755 usr/local/bin/$restored
 fi
-if [[ $VERSION == 15.* ]]; then
-    ./bin/img4 -i tmp1/Firmware/$ramdisk_dmg_name.trustcache -o work/trustcache.raw
-    if [[ $IDENTIFIER != iPhone12,8 ]]; then
-        ./bin/trustcache append work/trustcache.raw work/restored_patch
+if [[ $VERSION == 15.* || $VERSION == 16.4 ]]; then
+    if [[ $VERSION == 16.4 ]]; then
+        trustcache_input="$target_trustcache_path"
+        trustcache_output="$base_trustcache_path"
+    else
+        trustcache_input="tmp1/Firmware/$ramdisk_dmg_name.trustcache"
+        trustcache_output="tmp2/Firmware/$ramdisk_dmg_name_18.trustcache"
     fi
-    ./bin/trustcache append work/trustcache.raw work/asr_patched
-    ./bin/trustcache append work/trustcache.raw work/libimg4.patch
-    ./bin/img4 -i work/trustcache.raw -o tmp2/Firmware/$ramdisk_dmg_name_18.trustcache -A -T rtsc
+    if [[ $VERSION == 16.4 ]]; then
+        "$IOS164_IMG4" -i "$trustcache_input" -o work/trustcache.raw || exit 1
+    else
+        ./bin/img4 -i "$trustcache_input" -o work/trustcache.raw || exit 1
+    fi
+    if [[ $VERSION == 16.4 ]]; then
+        [[ -s work/asr_patched && -s work/libimg4.patch ]] || {
+            echo "FATAL: iOS 16.4 trust-cache inputs are missing"
+            exit 1
+        }
+        cp work/trustcache.raw work/trustcache.stock.raw
+    fi
+    if [[ -f work/restored_patch ]] && [[ $IDENTIFIER != iPhone12,8 ]]; then
+        ./bin/trustcache append work/trustcache.raw work/restored_patch || exit 1
+    fi
+    ./bin/trustcache append work/trustcache.raw work/asr_patched || exit 1
+    ./bin/trustcache append work/trustcache.raw work/libimg4.patch || exit 1
+    if [[ $VERSION == 16.4 ]]; then
+        "$IOS164_IMG4" -i work/trustcache.raw -o "$trustcache_output" -A -T rtsc || exit 1
+    else
+        ./bin/img4 -i work/trustcache.raw -o "$trustcache_output" -A -T rtsc || exit 1
+    fi
+    if [[ $VERSION == 16.4 ]]; then
+        # Add the patched files to the restore trust cache.
+        [[ -s work/trustcache.raw && -s "$trustcache_output" ]] &&
+        ! cmp -s work/trustcache.stock.raw work/trustcache.raw || {
+            echo "FATAL: iOS 16.4 RestoreTrustCache injection failed"
+            exit 1
+        }
+    fi
 fi
 # pack rdsk into im4p
-./bin/img4 -i work/ramdisk.raw -o $restore_ramdisk_dmg_18 -A -T rdsk
+if [[ $VERSION == 16.4 ]]; then
+    "$IOS164_IMG4" -i work/ramdisk.raw -o $restore_ramdisk_dmg_18 -A -T rdsk
+else
+    ./bin/img4 -i work/ramdisk.raw -o $restore_ramdisk_dmg_18 -A -T rdsk
+fi
 cd tmp2
 zip -0 -r ../custom.ipsw *
 cd ..
@@ -2287,12 +2489,21 @@ sleep 5
 echo "Sending iBSS"
 if [[ $IDENTIFIER == iPhone11* || $IDENTIFIER == iPhone12* || $IDENTIFIER == iPad11* ]]; then
     curl -L -o bin/liter8ctl https://github.com/prdgmshift/usbliter8/raw/refs/heads/main/usbliter8ctl
+    chmod +x bin/liter8ctl 2>/dev/null || true
+    if [[ -z "${LITER8_PYTHON:-}" ]]; then
+        LITER8_PYTHON="python3"
+        [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && LITER8_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+    fi
+    if ! "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
+        echo "FATAL: pyusb missing ($LITER8_PYTHON). Install: python3 -m venv .venv && .venv/bin/pip install pyusb"
+        exit 1
+    fi
     if [[ $dist == 1 || $dist == 2 || $dist == 5 ]]; then
-        python3 bin/liter8ctl boot $bootdir/iBSS.boot || true
+        "$LITER8_PYTHON" bin/liter8ctl boot $bootdir/iBSS.boot || true
         echo "If you see the error: No such device (it may have been disconnected)"
         echo "This error is normal on Linux as long as the Device actually starts booting after iBSS is sent."
     else
-        python3 bin/liter8ctl boot $bootdir/iBSS.boot
+        "$LITER8_PYTHON" bin/liter8ctl boot $bootdir/iBSS.boot
     fi
     echo "Device should now boot"
     exit 0
@@ -2670,9 +2881,12 @@ if [[ $VERSION == 14.* || $VERSION == 15.* ]]; then
         echo "Haptic home button will not work."
     fi
     read -p "Press enter to continue"
-elif [[ $VERSION == 16.* || $VERSION == 17.* || $VERSION == 18.* || $VERSION == 26.* ]]; then
-    echo "iOS 16-26 A12/A13 downgrades are not supported at the moment"
-    exit 1
+    elif [[ $VERSION == 16.4 ]]; then
+        echo "iOS 16.4 is an experimental tethered target."
+        echo "The first pass uses --no-baseband; SEP/U1/activation are independent risks."
+    elif [[ $VERSION == 16.* || $VERSION == 17.* || $VERSION == 18.* || $VERSION == 26.* ]]; then
+        echo "Only iOS 16.4 is wired into this experimental A12/A13 path."
+        exit 1
 elif [[ $VERSION == 13.* || $VERSION == 12.* ]] && [[ $IDENTIFIER == iPhone11* ]]; then
     echo "SEP is incompatible"
     exit 1
@@ -2689,51 +2903,141 @@ if [[ $IDENTIFIER == iPhone12* ]] && [[ $VERSION == 14.* ]]; then
 fi
 
 if [[ $VERSION == 13.* || $VERSION == 14.* || $VERSION == 15.0* || $VERSION == 15.1* || $VERSION == 15.2* || $VERSION == 15.3* ]] && [[ $IDENTIFIER == iPhone12* ]] && [[ $IDENTIFIER != iPhone12,8 ]]; then
-    echo "Rose is very likely incompatible"
-    echo "Not continuing."
-    exit 1
+    # U1 compatibility is still uncertain.
+    echo
+    echo "================================================================"
+    echo " WARNING: Rose (U1) is very likely incompatible on this target"
+    echo " Device: $IDENTIFIER   Target: iOS $VERSION"
+    echo " Expect failed restore, hang, or broken UWB — not “supported”."
+    echo " You need matching keys in keys/$IDENTIFIER.txt (e.g. ibss-$VERSION)."
+    echo "================================================================"
+    read -p "Force continue and try anyway? (y/N): " rose_force
+    if [[ $rose_force != y && $rose_force != Y ]]; then
+        echo "Aborted (Rose gate)."
+        exit 1
+    fi
+    echo "Proceeding past Rose gate at your own risk..."
 elif [[ $VERSION == 15.4* || $VERSION == 15.5* || $VERSION == 15.6* ]] && [[ $IDENTIFIER == iPhone12* ]] && [[ $IDENTIFIER != iPhone12,8 ]]; then
     echo "iOS $LATEST_VERSION Rose may or may not be compatible"
     echo "Proceed with very extreme caution."
     read -p "Press enter to continue"
 fi
 
-dfu_helper_a11
-pwn_device
-det_rsep_flag
+	dfu_helper_a11
+	pwn_device
+	det_rsep_flag
+
+	# Start 16.4 experiments without updating modem firmware.
+	if [[ $VERSION == 16.4 ]]; then
+	    case "${SURREALRA1N_IOS164_BASEBAND:-none}" in
+	        none) updatebb_flag="--no-baseband" ;;
+	        latest) updatebb_flag="--latest-baseband" ;;
+	        *) echo "Invalid SURREALRA1N_IOS164_BASEBAND (use none or latest)"; exit 1 ;;
+	    esac
+	    echo "iOS 16.4 baseband mode: ${SURREALRA1N_IOS164_BASEBAND:-none} ($updatebb_flag)"
+	fi
 
 restoredir="restorefiles/$IDENTIFIER/$VERSION"
+
+# Normal mode keeps the native d421 updater.
+IPHONE12_3_BB_MODE="${SURREALRA1N_11PRO_BB_MODE:-normal}"
+IPHONE12_3_BB_ENGINE="native-d421-v1"
+[[ $IPHONE12_3_BB_MODE == workaround ]] && IPHONE12_3_BB_ENGINE="upstream-workaround-v1"
+if [[ $IDENTIFIER == iPhone12,3 ]]; then
+    if [[ $IPHONE12_3_BB_MODE != workaround && $IPHONE12_3_BB_MODE != normal ]]; then
+        echo "Invalid SURREALRA1N_11PRO_BB_MODE='$IPHONE12_3_BB_MODE' (use workaround or normal)."
+        exit 1
+    fi
+    if [[ -z ${SURREALRA1N_11PRO_BB_MODE:-} ]]; then
+        echo
+        echo "iPhone 11 Pro baseband mode:"
+        echo "  [Y] Native normal baseband (default): required for service; activation still depends on SEP"
+        echo "  [n] Upstream workaround: known restore success, but no usable baseband / activation"
+        read -p "Use native normal baseband? (Y/n): " iphone12_3_bb_choice
+        if [[ $iphone12_3_bb_choice == N || $iphone12_3_bb_choice == n ]]; then
+            IPHONE12_3_BB_MODE="workaround"
+            IPHONE12_3_BB_ENGINE="upstream-workaround-v1"
+        fi
+    fi
+    echo "iPhone 11 Pro baseband mode: $IPHONE12_3_BB_MODE"
+fi
 
 if [[ ! -f "$restoredir/custom.ipsw" ]]; then
     echo "Restore files does not exist, making new ones"
     make_custom_ipsw_a12_ios14
 else
     echo "Restore files already exist"
-    read -p "Would you like to make new ones? (y/n): " restorefiles_remake
+    restorefiles_remake=""
+    if [[ $IDENTIFIER == iPhone12,3 ]]; then
+        existing_bb_mode="$(cat "$restoredir/.iphone12_3_bb_mode" 2>/dev/null || true)"
+        existing_bb_engine="$(cat "$restoredir/.iphone12_3_bb_engine" 2>/dev/null || true)"
+        # Earlier IPSWs used the baseless workaround.
+        [[ -z $existing_bb_mode ]] && existing_bb_mode="workaround"
+        [[ -z $existing_bb_engine && $existing_bb_mode == workaround ]] && \
+            existing_bb_engine="upstream-workaround-v1"
+        if [[ $existing_bb_mode != $IPHONE12_3_BB_MODE || \
+              $existing_bb_engine != $IPHONE12_3_BB_ENGINE ]]; then
+            echo "The existing custom IPSW uses '$existing_bb_mode/$existing_bb_engine'."
+            echo "Rebuilding it for '$IPHONE12_3_BB_MODE/$IPHONE12_3_BB_ENGINE'."
+            restorefiles_remake="Y"
+        fi
+    fi
+    if [[ -z $restorefiles_remake ]]; then
+        read -p "Would you like to make new ones? (y/n): " restorefiles_remake
+    fi
     if [[ $restorefiles_remake == Y || $restorefiles_remake == y ]]; then
-        rm -rf "$restoredir"
+        if [[ $IDENTIFIER == iPhone12,3 && -d $restoredir ]]; then
+            restorefiles_backup="${restoredir}.backup-$(date +%Y%m%d-%H%M%S)"
+            echo "Preserving existing restore files at: $restorefiles_backup"
+            mv "$restoredir" "$restorefiles_backup"
+        else
+            rm -rf "$restoredir"
+        fi
         make_custom_ipsw_a12_ios14
     fi
 fi
+if [[ $IDENTIFIER == iPhone12,3 ]]; then
+    # Save the baseband mode with the generated IPSW.
+    printf '%s\n' "$IPHONE12_3_BB_MODE" > "$restoredir/.iphone12_3_bb_mode"
+    printf '%s\n' "$IPHONE12_3_BB_ENGINE" > "$restoredir/.iphone12_3_bb_engine"
+fi
 curl -L -o bin/liter8ctl https://github.com/prdgmshift/usbliter8/raw/refs/heads/main/usbliter8ctl
+chmod +x bin/liter8ctl 2>/dev/null || true
+# pyusb is required before booting.
+if [[ -z "${LITER8_PYTHON:-}" ]]; then
+    LITER8_PYTHON="python3"
+    [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && LITER8_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+fi
+if ! "$LITER8_PYTHON" -c "import usb" 2>/dev/null; then
+    echo "FATAL: pyusb not importable ($LITER8_PYTHON). Cannot send iBSS via liter8ctl."
+    echo "Run:  cd \"$SCRIPT_DIR\" && python3 -m venv .venv && .venv/bin/pip install pyusb"
+    exit 1
+fi
+# Keep the device in pwned DFU until the files are ready.
+echo "Booting patched iBSS with liter8ctl ($LITER8_PYTHON)..."
 if [[ $dist == 1 || $dist == 2 || $dist == 5 ]]; then
-    python3 bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch || true
+    "$LITER8_PYTHON" bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch || true
     echo "If you see the error: No such device (it may have been disconnected)"
     echo "This error is normal on Linux as long as the Device enters iBSS recovery mode (screen Should remain blank but be detected as Recovery mode device)."
-elif [[ $dist == 3 ]] && [[ $macos_ver == 27.* || $macos_ver == 26.* ]]; then
-    python3 bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch || true
-    echo "usbliter8ctl may error out."
+elif [[ $dist == 3 ]] && [[ ${macos_ver:-} == 27.* || ${macos_ver:-} == 26.* ]]; then
+    "$LITER8_PYTHON" bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch || true
+    echo "usbliter8ctl may error out after a successful handoff."
     echo "The error may be normal as long as the Device enters iBSS recovery mode (screen Should remain blank but be detected as Recovery mode device)."
 else
-    python3 bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch 
+    "$LITER8_PYTHON" bin/liter8ctl boot boot/$IDENTIFIER/iBSS.patch
 fi
 sleep 6
 echo "Checking if device is in Recovery mode"
-MODE=$(./bin/irecovery -q | grep "^MODE:" | cut -d ':' -f2 | xargs)
+MODE=$(./bin/irecovery -q 2>/dev/null | grep "^MODE:" | cut -d ':' -f2 | xargs || true)
 if [[ $MODE == Recovery ]]; then
     echo "Device has been detected in Recovery mode."
 else
-    echo "Device not detected in Recovery. Exiting"
+    echo "Device not detected in Recovery (mode='${MODE:-none}'). Staying in DFU usually means liter8ctl never loaded iBSS."
+    echo "Checklist:"
+    echo "  1) pyusb works:  $LITER8_PYTHON -c 'import usb'"
+    echo "  2) phone still PWND DFU (re-pwn with Pico if needed)"
+    echo "  3) boot file exists: boot/$IDENTIFIER/iBSS.patch"
+    echo "  4) re-run Start Restore; custom.ipsw is already built — answer n to remake"
     exit 1
 fi
 APNONCE=$(./bin/irecovery -q | grep "^NONC:" | cut -d ':' -f2 | xargs)
@@ -2755,10 +3059,14 @@ if [[ -z "$SHSH_PATH" ]]; then
     echo "No SHSH file found in the shsh folder. Aborting"
     exit 1
 fi
+mkdir -p logs
+restore_log="logs/${IDENTIFIER//,/_}-${VERSION}-$(date +%Y%m%d-%H%M%S).log"
+echo "Saving the complete futurerestore log to: $restore_log"
 while true; do
     set +e
-    sudo ./futurerestore/futurerestore -t $SHSH_PATH $rsep_flag --latest-sep $updatebb_flag $restoredir/custom.ipsw
-    EXIT_CODE=$?
+    sudo ./futurerestore/futurerestore -t "$SHSH_PATH" $rsep_flag --latest-sep \
+        $updatebb_flag "$restoredir/custom.ipsw" 2>&1 | tee -a "$restore_log"
+    EXIT_CODE=${PIPESTATUS[0]}
     set -e
     if [[ $EXIT_CODE -eq 139 ]]; then
         echo "futurerestore segfaulted (exit 139), retrying..."
@@ -3229,6 +3537,234 @@ fi
 
 }
 
+fix_ios164_tool_permissions(){
+    local tool
+    for tool in "$@"; do
+        [[ -e "$tool" ]] || {
+            echo "Missing required iOS 16.4 tool: $tool"
+            exit 2
+        }
+        if [[ ! -x "$tool" ]]; then
+            chmod u+x "$tool" 2>/dev/null || {
+                echo "Cannot make iOS 16.4 tool executable: $tool"
+                exit 2
+            }
+        fi
+        xattr -d com.apple.quarantine "$tool" 2>/dev/null || true
+    done
+}
+
+prepare_ios164_build_inputs(){
+    local target_ipsw="$1"
+    local base_ipsw="$2"
+    local python_bin="${LITER8_PYTHON:-python3}"
+    local target_values base_values
+    local target_version target_build base_version base_build
+    local img4_probe img4_output
+
+    [[ "$(uname -s)" == "Darwin" ]] || {
+        echo "iOS 16.4 beta builds currently require macOS."
+        exit 2
+    }
+    command -v hdiutil >/dev/null 2>&1 || {
+        echo "iOS 16.4 beta builds require hdiutil."
+        exit 2
+    }
+    [[ -f "$target_ipsw" ]] || { echo "Missing target IPSW: $target_ipsw"; exit 2; }
+    [[ -f "$base_ipsw" ]] || { echo "Missing base IPSW: $base_ipsw"; exit 2; }
+    case "$IDENTIFIER" in
+        iPhone11,2|iPhone11,6|iPhone11,8|iPhone12,1|iPhone12,3|iPhone12,5|iPhone12,8) ;;
+        *)
+            echo "iOS 16.4 build supports A12/A13 iPhones only; detected: $IDENTIFIER"
+            exit 2
+            ;;
+    esac
+
+    fix_ios164_tool_permissions \
+        "$SCRIPT_DIR/tools/img4-ios164" \
+        "$SCRIPT_DIR/bin/iBootPatch" \
+        "$SCRIPT_DIR/bin/iBootpatch2" \
+        "$SCRIPT_DIR/bin/Kernel64Patcher3" \
+        "$SCRIPT_DIR/bin/asr64_patcher" \
+        "$SCRIPT_DIR/bin/libimg4_patcher" \
+        "$SCRIPT_DIR/bin/ldid" \
+        "$SCRIPT_DIR/bin/trustcache" \
+        "$SCRIPT_DIR/bin/kerneldiff" \
+        "$SCRIPT_DIR/bin/img4" \
+        "$SCRIPT_DIR/bin/patch_ios164_kernel.py" \
+        "$SCRIPT_DIR/bin/patch_ios164_ramdisk.sh"
+    [[ -f "$SCRIPT_DIR/tools/kernel_patchfinder.py" ]] || {
+        echo "Missing required iOS 16.4 patchfinder: $SCRIPT_DIR/tools/kernel_patchfinder.py"
+        exit 2
+    }
+    [[ -f "$SCRIPT_DIR/bin/inspect_ios164_manifest.py" ]] || {
+        echo "Missing iOS 16.4 manifest checker."
+        exit 2
+    }
+    [[ -f "$SCRIPT_DIR/requirements-ios164.txt" ]] || {
+        echo "Missing iOS 16.4 Python requirements."
+        exit 2
+    }
+
+    target_values=$("$python_bin" "$SCRIPT_DIR/bin/inspect_ios164_manifest.py" \
+        "$target_ipsw" "$IDENTIFIER" "$BOARDID")
+    base_values=$("$python_bin" "$SCRIPT_DIR/bin/inspect_ios164_manifest.py" \
+        "$base_ipsw" "$IDENTIFIER" "$BOARDID")
+    IFS=$'\t' read -r target_version target_build IOS164_TARGET_IDENTITY \
+        IOS164_TARGET_KERNEL IOS164_TARGET_OS IOS164_TARGET_RAMDISK \
+        IOS164_TARGET_TRUSTCACHE <<<"$target_values"
+    IFS=$'\t' read -r base_version base_build IOS164_BASE_IDENTITY \
+        IOS164_BASE_KERNEL IOS164_BASE_OS IOS164_BASE_RAMDISK \
+        IOS164_BASE_TRUSTCACHE <<<"$base_values"
+
+    [[ "$target_version" == "16.4" && "$target_build" == "20E247" ]] || {
+        echo "Target must be iOS 16.4 (20E247), got $target_version ($target_build)"
+        exit 2
+    }
+    [[ "$base_version" == "$LATEST_VERSION" && "$base_build" == "$IOS164_BASE_BUILD" ]] || {
+        echo "Base IPSW must be iOS $LATEST_VERSION ($IOS164_BASE_BUILD) for $IDENTIFIER, got $base_version ($base_build)"
+        exit 2
+    }
+    [[ -n "$IOS164_TARGET_IDENTITY" && -n "$IOS164_BASE_IDENTITY" && \
+       -n "$IOS164_TARGET_KERNEL" && -n "$IOS164_BASE_KERNEL" && \
+       -n "$IOS164_TARGET_OS" && -n "$IOS164_BASE_OS" && \
+       -n "$IOS164_TARGET_RAMDISK" && -n "$IOS164_BASE_RAMDISK" && \
+       -n "$IOS164_TARGET_TRUSTCACHE" && -n "$IOS164_BASE_TRUSTCACHE" ]] || {
+        echo "Could not resolve the selected iOS 16.4 manifest identity."
+        exit 2
+    }
+    local ibss_key ibec_key
+    ibss_key=$(grep '^ibss-16.4:' "$KEY_FILE" | cut -d':' -f2 | xargs)
+    ibec_key=$(grep '^ibec-16.4:' "$KEY_FILE" | cut -d':' -f2 | xargs)
+    [[ "$ibss_key" =~ ^[0-9A-Fa-f]{96}$ ]] || {
+        echo "Missing iBSS 16.4 key in $KEY_FILE"
+        exit 2
+    }
+    [[ "$ibec_key" =~ ^[0-9A-Fa-f]{96}$ ]] || {
+        echo "Missing iBEC 16.4 key in $KEY_FILE"
+        exit 2
+    }
+
+    IOS164_IMG4="$SCRIPT_DIR/tools/img4-ios164"
+    img4_probe=$(mktemp /tmp/surreal-ios164-kernel.XXXXXX)
+    img4_output=$(mktemp /tmp/surreal-ios164-kernel-output.XXXXXX)
+    unzip -p "$target_ipsw" "$IOS164_TARGET_KERNEL" >"$img4_probe" || {
+        rm -f "$img4_probe" "$img4_output"
+        echo "Could not extract $IOS164_TARGET_KERNEL from the target IPSW"
+        exit 2
+    }
+    if ! "$IOS164_IMG4" -i "$img4_probe" -o "$img4_output" >/dev/null 2>&1 || [[ ! -s "$img4_output" ]]; then
+        rm -f "$img4_probe" "$img4_output"
+        echo "The bundled iOS 16.4 img4 tool could not extract the target kernel."
+        exit 2
+    fi
+    rm -f "$img4_probe" "$img4_output"
+
+    if ! "$python_bin" -c 'import capstone' 2>/dev/null; then
+        echo "Installing the iOS 16.4 patchfinder dependency (capstone)..."
+        "$python_bin" -m pip install -q -r requirements-ios164.txt || {
+            echo "Could not install capstone; run: $python_bin -m pip install -r requirements-ios164.txt"
+            exit 2
+        }
+    fi
+
+    [[ "$IOS164_TARGET_KERNEL" == "$KERNEL" ]] || {
+        echo "Target kernel path for $IDENTIFIER changed: $IOS164_TARGET_KERNEL"
+        exit 2
+    }
+    IOS164_TARGET_VERSION="$target_version"
+    IOS164_TARGET_BUILD="$target_build"
+    IOS164_BASE_VERSION="$base_version"
+    echo "Validated $IDENTIFIER target identity $IOS164_TARGET_IDENTITY and base identity $IOS164_BASE_IDENTITY."
+}
+
+ios164_build(){
+
+    # This command only builds local artifacts.
+    local target_arg base_arg
+    if [[ $# -eq 4 && "$2" == iPhone* ]]; then
+        target_arg="$3"
+        base_arg="$4"
+    elif [[ $# -eq 3 ]]; then
+        target_arg="$2"
+        base_arg="$3"
+    else
+        echo "Usage: $0 ios164-build [iPhone12,3] <16.4-target.ipsw> <current-base.ipsw>"
+        exit 2
+    fi
+
+    local target_ipsw base_ipsw
+    resolve_ipsw() {
+        local input="$1" output
+        if [[ "$input" == http://* || "$input" == https://* ]]; then
+            mkdir -p ipsw
+            output="ipsw/${input##*/}"
+            output="${output%%\?*}"
+            if [[ ! -s "$output" ]]; then
+                echo "Downloading IPSW to $output" >&2
+                curl --fail --location --continue-at - --output "$output" "$input"
+            fi
+            printf '%s\n' "$output"
+        else
+            printf '%s\n' "$input"
+        fi
+    }
+    target_ipsw=$(resolve_ipsw "$target_arg")
+    base_ipsw=$(resolve_ipsw "$base_arg")
+    [[ -f "$target_ipsw" ]] || { echo "Missing target IPSW: $target_ipsw"; exit 2; }
+    [[ -f "$base_ipsw" ]] || { echo "Missing base IPSW: $base_ipsw"; exit 2; }
+
+    case "$IDENTIFIER" in
+        iPhone11,2|iPhone11,6|iPhone11,8|iPhone12,1|iPhone12,3|iPhone12,5|iPhone12,8) ;;
+        *)
+            echo "iOS 16.4 build supports A12/A13 iPhones only; detected: $IDENTIFIER"
+            exit 2
+            ;;
+    esac
+
+    prepare_ios164_build_inputs "$target_ipsw" "$base_ipsw"
+
+    echo "Building experimental iOS 16.4 bundle for $IDENTIFIER ($BOARDID)"
+    echo "Baseband mode: none (no modem update will be requested by the restore phase)"
+    echo "iOS 16 img4: $IOS164_IMG4"
+    local scratch
+    for scratch in tmp1 tmp2 work; do
+        if [[ -e "$scratch" ]]; then
+            echo "Refusing to reuse existing build scratch directory: $scratch"
+            echo "Move it aside, then rerun this build command."
+            exit 2
+        fi
+    done
+    IPSW_PATH="$target_ipsw"
+    IPSW_PATH_LATEST="$base_ipsw"
+    VERSION="16.4"
+    BUILD="20E247"
+    VERSION_LATEST="$IOS164_BASE_VERSION"
+    updatebb_flag="--no-baseband"
+    IPHONE12_3_BB_MODE="workaround"
+    IPHONE12_3_BB_ENGINE="ios164-no-baseband"
+    restoredir="restorefiles/$IDENTIFIER/$VERSION"
+
+    if [[ -e "$restoredir" ]]; then
+        local previous_restoredir="${restoredir}.pre-ios164-build-$(date +%Y%m%d-%H%M%S)"
+        mv "$restoredir" "$previous_restoredir"
+        echo "Preserved existing artifact directory as $previous_restoredir"
+    fi
+    make_custom_ipsw_a12_ios14
+
+    [[ -s "boot/$IDENTIFIER/$VERSION/iBSS.boot" ]] || {
+        echo "Build failed: missing local-boot iBSS"
+        exit 1
+    }
+    [[ -s "$restoredir/custom.ipsw" ]] || {
+        echo "Build failed: missing custom IPSW"
+        exit 1
+    }
+    echo "Build complete: boot/$IDENTIFIER/$VERSION/iBSS.boot"
+    echo "Build complete: $restoredir/custom.ipsw"
+    echo "No device state was changed. Use the normal restore flow only after reviewing the generated artifacts."
+}
+
 main_menu(){
 
 clear
@@ -3256,5 +3792,10 @@ else
 fi
 
 }
+
+if [[ "${1:-}" == "ios164-build" ]]; then
+    ios164_build "$@"
+    exit $?
+fi
 
 main_menu

@@ -1,2 +1,14 @@
 bin/*
 !bin/notice.txt
+!bin/patch_ios164_kernel.py
+!bin/patch_ios164_ramdisk.sh
+!bin/inspect_ios164_manifest.py
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+boot/
+ipsw/
+logs/
+restorefiles/
+shsh/

@@ -1,0 +1,2 @@
+# Required by bin/patch_ios164_kernel.py through the semantic kernel patchfinder.
+capstone==5.0.7
