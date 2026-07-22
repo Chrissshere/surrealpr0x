@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 19"
+CURRENT_VERSION="v2.0 beta 21"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -102,6 +102,39 @@ JAILBREAK=0
 
 DISTRO="Unsupported"
 ARCH="$(uname -m)"
+
+macos_binary_matches_host(){
+    local helper helper_archs
+
+    [[ -f "$1" ]] || return 0
+    helper="$1"
+    if command -v lipo >/dev/null 2>&1; then
+        helper_archs=$(lipo -archs "$helper" 2>/dev/null || true)
+    else
+        helper_archs=$(file -b "$helper" 2>/dev/null || true)
+    fi
+    [[ " $helper_archs " == *" $ARCH "* ]]
+}
+
+macos_helpers_match_host(){
+    local helper
+
+    [[ $dist == 4 ]] || return 0
+    for helper in \
+        tools/img4-ios164 \
+        bin/img4 \
+        bin/kerneldiff \
+        bin/iBootPatch \
+        bin/iBootpatch2 \
+        bin/Kernel64Patcher3 \
+        bin/asr64_patcher \
+        bin/libimg4_patcher \
+        bin/ldid \
+        bin/trustcache \
+        futurerestore/futurerestore; do
+        macos_binary_matches_host "$helper" || return 1
+    done
+}
 
 # macOS detection
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -434,6 +467,12 @@ echo "Checking for existing binaries..."
 
 #!/bin/bash
 
+MACOS_HELPERS_NEED_REBUILD=0
+if [[ $dist == 3 || $dist == 4 ]] && ! macos_helpers_match_host; then
+    MACOS_HELPERS_NEED_REBUILD=1
+    echo "Some macOS helpers were built for another CPU. Rebuilding them for $ARCH."
+fi
+
 # Check if all required binaries exist
 if [[ -f "./bin/img4" && \
       -f "./bin/img4tool" && \
@@ -468,7 +507,8 @@ if [[ -f "./bin/img4" && \
       -f "./bin/ldid" && \
       -f "./activate.sh" && \
       -f "./backup.sh" && \
-      -f "./futurerestore/futurerestore" ]]; then
+      -f "./futurerestore/futurerestore" && \
+      $MACOS_HELPERS_NEED_REBUILD -eq 0 ]]; then
     echo "Found necessary binaries."
 elif [[ $dist == 3 ]]; then
     echo "Binaries do not exist"
