@@ -5,6 +5,7 @@ on:
       - 'update/latest.txt'
     branches:
       - development
+      - ios164-beta
 jobs:
   create-release:
     runs-on: ubuntu-latest

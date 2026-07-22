@@ -1,5 +1,7 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 17 re-release"
+CURRENT_VERSION="v2.0 beta 19"
+UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
+UPDATE_BRANCH="ios164-beta"
 
 if [ "$EUID" -eq 0 ]; then
   echo "ERROR: Do not run this script with sudo or as root."
@@ -374,7 +376,7 @@ if [[ "${1:-}" == "ios164-build" ]]; then
 else
     echo "Checking for updates..."
     rm -rf update/latest.txt
-    curl -L -o update/latest.txt https://github.com/pwnerblu/surrealra1n/raw/refs/heads/development/update/latest.txt
+    curl -L -o update/latest.txt "$UPDATE_REPOSITORY_URL/raw/refs/heads/$UPDATE_BRANCH/update/latest.txt"
     LATEST_VERSION=$(head -n 1 "update/latest.txt" | tr -d '\r\n')
     RELEASE_NOTES=$(awk '/^RELEASE NOTES:/{flag=1; next} flag' "update/latest.txt")
 
@@ -389,7 +391,7 @@ if [[ $LATEST_VERSION != $CURRENT_VERSION ]]; then
         rm -rf "updatefiles"
         mkdir updatefiles
         rm -rf "updatefiles/repo"
-        git clone --branch development https://github.com/pwnerblu/surrealra1n updatefiles/repo --recursive
+        git clone --branch "$UPDATE_BRANCH" "$UPDATE_REPOSITORY_URL" updatefiles/repo --recursive
         if [[ ! -d updatefiles/repo ]]; then
             echo "Failed to clone repository."
             exit 1
