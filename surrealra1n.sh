@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 23"
+CURRENT_VERSION="v2.0 beta 24"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -2325,23 +2325,45 @@ ensure_ios164_futurerestore(){
     local fr_bin="$SCRIPT_DIR/futurerestore/futurerestore-usbliter8"
     local patcher="$SCRIPT_DIR/tools/patch_futurerestore_usbliter8.py"
     local python_bin="${LITER8_PYTHON:-python3}"
-    local patch_word host_arch
+    local patch_word host_arch host_os
 
     [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && python_bin="$SCRIPT_DIR/.venv/bin/python"
+    host_os=$(uname -s)
     host_arch=$(uname -m)
+
+    [[ -x "$stock_bin" ]] || {
+        echo "FATAL: stock futurerestore is missing at $stock_bin"
+        echo "Run surrealra1n once so it can download Build 329, then retry."
+        return 1
+    }
+
+    # Linux: macOS arm64 byte patches do not apply to the Linux x86_64 binary.
+    # Use stock Build 329 under the usbliter8 name so the Odysseus argv stays shared.
+    if [[ "$host_os" != "Darwin" ]]; then
+        echo "Linux: using stock futurerestore Build 329 for the iOS 16.4 path."
+        echo "Note: the macOS usbliter8 patch set is arm64-only; Linux keeps stock FR for now."
+        if [[ ! -x "$fr_bin" || "$stock_bin" -nt "$fr_bin" ]]; then
+            cp "$stock_bin" "$fr_bin" || {
+                echo "FATAL: could not install futurerestore-usbliter8 from stock."
+                return 1
+            }
+            chmod +x "$fr_bin" || true
+        fi
+        if ! "$fr_bin" -h >/dev/null 2>&1; then
+            echo "FATAL: futurerestore cannot run on this Linux host: $fr_bin"
+            return 1
+        fi
+        return 0
+    fi
+
     if [[ "$host_arch" != "arm64" ]]; then
-        echo "FATAL: the iOS 16.4 Odysseus restore path requires an Apple Silicon Mac."
+        echo "FATAL: on macOS, the iOS 16.4 Odysseus restore path requires Apple Silicon."
         echo "Stock futurerestore cannot take over from liter8 Recovery with --no-ibss,"
         echo "and the usbliter8 FR patch set is arm64-only (Build 329)."
         return 1
     fi
     [[ -f "$patcher" ]] || {
         echo "FATAL: missing $patcher"
-        return 1
-    }
-    [[ -x "$stock_bin" ]] || {
-        echo "FATAL: stock futurerestore is missing at $stock_bin"
-        echo "Run surrealra1n once so it can download Build 329, then retry."
         return 1
     }
 
@@ -2373,6 +2395,163 @@ ensure_ios164_futurerestore(){
         }
     fi
     echo "Using usbliter8-patched futurerestore for the iOS 16.4 Odysseus path."
+}
+
+# Pre-seed futurerestore's TMPDIR cache from the local base IPSW so Cryptex1 /
+# SEP / Rose are not re-downloaded via flaky libfragmentzip (LFZP 487 mid-file).
+# FR Build 329 looks for fixed basenames under $TMPDIR/futurerestore/.
+seed_ios164_futurerestore_cache(){
+
+    local base_ipsw="$1"
+    local fr_cache="$2"
+    local python_bin="${LITER8_PYTHON:-python3}"
+    local cache_dir board_class
+
+    [[ -f "$base_ipsw" ]] || {
+        echo "WARNING: cannot seed FR cache — missing base IPSW: $base_ipsw"
+        return 1
+    }
+    [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && python_bin="$SCRIPT_DIR/.venv/bin/python"
+    board_class="$BOARDID"
+    cache_dir="$fr_cache/futurerestore"
+    mkdir -p "$cache_dir"
+
+    echo "Seeding futurerestore cache from base IPSW (avoids CDN Cryptex/SEP pzb downloads)..."
+    if ! "$python_bin" - "$base_ipsw" "$cache_dir" "$board_class" <<'PY'
+import plistlib
+import shutil
+import sys
+import zipfile
+from pathlib import Path
+
+ipsw, cache_dir, board = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
+cache_dir.mkdir(parents=True, exist_ok=True)
+
+# futurerestore Build 329 cache basenames (see "Checking for cached Cryptex1...")
+CRYPTEX_MAP = {
+    "Cryptex1,SystemOS": "cryptex1SysOS.dmg",
+    "Cryptex1,SystemVolume": "cryptex1SysVOL.dmg.root_hash",
+    "Cryptex1,SystemTrustCache": "cryptex1SysTC.dmg.trustcache",
+    "Cryptex1,AppOS": "cryptex1AppOS.dmg",
+    "Cryptex1,AppVolume": "cryptex1AppVOL.dmg.root_hash",
+    "Cryptex1,AppTrustCache": "cryptex1AppTC.dmg.trustcache",
+}
+
+with zipfile.ZipFile(ipsw) as zf:
+    manifest = plistlib.loads(zf.read("BuildManifest.plist"))
+    identity = None
+    for bi in manifest.get("BuildIdentities", []):
+        info = bi.get("Info", {})
+        if (
+            info.get("DeviceClass") == board
+            and info.get("RestoreBehavior") == "Erase"
+        ):
+            identity = bi
+            break
+    if identity is None:
+        # Fall back to first Erase identity if board match is missing.
+        for bi in manifest.get("BuildIdentities", []):
+            if bi.get("Info", {}).get("RestoreBehavior") == "Erase":
+                identity = bi
+                break
+    if identity is None:
+        raise SystemExit("no Erase identity in base IPSW BuildManifest")
+
+    man = identity["Manifest"]
+    seeded = []
+    missing = []
+
+    def copy_member(member: str, dest_name: str) -> None:
+        dest = cache_dir / dest_name
+        if dest.is_file() and dest.stat().st_size > 0:
+            # Keep a complete prior seed.
+            if dest.stat().st_size == zf.getinfo(member).file_size:
+                seeded.append(f"{dest_name} (cached)")
+                return
+        with zf.open(member) as src, open(dest, "wb") as out:
+            shutil.copyfileobj(src, out, length=1024 * 1024)
+        if not dest.is_file() or dest.stat().st_size == 0:
+            raise SystemExit(f"failed to seed {dest_name} from {member}")
+        seeded.append(f"{dest_name} <- {member} ({dest.stat().st_size} bytes)")
+
+    for component, dest_name in CRYPTEX_MAP.items():
+        try:
+            path = man[component]["Info"]["Path"]
+        except KeyError:
+            missing.append(component)
+            continue
+        # SystemOS may be .dmg.aea in modern IPSWs; FR still caches as .dmg.
+        copy_member(path, dest_name)
+
+    # Optional: SEP / RestoreSEP so --latest-sep can skip the small download too.
+    for component, dest_name in (
+        ("RestoreSEP", "sep.im4p"),
+        ("SEP", "sep.im4p"),
+    ):
+        if (cache_dir / "sep.im4p").is_file() and (cache_dir / "sep.im4p").stat().st_size > 0:
+            break
+        try:
+            path = man[component]["Info"]["Path"]
+        except KeyError:
+            continue
+        try:
+            copy_member(path, dest_name)
+            break
+        except KeyError:
+            continue
+
+    for line in seeded:
+        print(f"  seeded: {line}")
+    if missing:
+        print("  missing components (FR may still CDN-fetch): " + ", ".join(missing))
+    required = [
+        "cryptex1SysOS.dmg",
+        "cryptex1SysVOL.dmg.root_hash",
+        "cryptex1SysTC.dmg.trustcache",
+        "cryptex1AppOS.dmg",
+        "cryptex1AppVOL.dmg.root_hash",
+        "cryptex1AppTC.dmg.trustcache",
+    ]
+    bad = [n for n in required if not (cache_dir / n).is_file() or (cache_dir / n).stat().st_size == 0]
+    if bad:
+        raise SystemExit("incomplete cryptex seed: " + ", ".join(bad))
+    print("Cryptex1 cache seed complete.")
+PY
+    then
+        echo "WARNING: could not seed FR cache from base IPSW; FR will try CDN pzb downloads."
+        return 1
+    fi
+    # Drop incomplete partials that LFZP may have left from a prior failed attempt.
+    # Only touch zero-byte cryptex stubs; complete seeds are kept.
+    local f
+    for f in "$cache_dir"/cryptex1*.dmg "$cache_dir"/cryptex1*.root_hash "$cache_dir"/cryptex1*.trustcache; do
+        [[ -e "$f" ]] || continue
+        if [[ ! -s "$f" ]]; then
+            echo "Removing empty cache stub: $f"
+            rm -f "$f"
+        fi
+    done
+    return 0
+}
+
+purge_ios164_partial_cryptex_cache(){
+
+    local fr_cache="$1"
+    local cache_dir="$fr_cache/futurerestore"
+    [[ -d "$cache_dir" ]] || return 0
+    # LFZP 487 mid-download can leave a truncated cryptex1SysOS.dmg that FR then
+    # treats as "cached" and never re-fetches cleanly. Always wipe cryptex on
+    # download-related failures so the next attempt re-seeds from the IPSW.
+    echo "Purging Cryptex1 entries from FR cache after download failure..."
+    rm -f \
+        "$cache_dir"/cryptex1SysOS.dmg \
+        "$cache_dir"/cryptex1SysVOL.dmg.root_hash \
+        "$cache_dir"/cryptex1SysTC.dmg.trustcache \
+        "$cache_dir"/cryptex1AppOS.dmg \
+        "$cache_dir"/cryptex1AppVOL.dmg.root_hash \
+        "$cache_dir"/cryptex1AppTC.dmg.trustcache \
+        "$cache_dir"/cryptex1SysOS.dmg.* \
+        "$cache_dir"/cryptex1AppOS.dmg.* 2>/dev/null || true
 }
 
 stage_ios164_futurerestore_iboot(){
@@ -3631,6 +3810,8 @@ if [[ $VERSION == 16.4 ]]; then
     stage_ios164_futurerestore_iboot "$restoredir" "$SHSH_PATH" || exit 1
     fr_cache="${TMPDIR:-/tmp}/surrealra1n-fr-cache-${IOS164_BASE_BUILD}"
     mkdir -p "$fr_cache"
+    # Prefer local base IPSW over CDN pzb for Cryptex1 (LFZP mid-download fails are common).
+    seed_ios164_futurerestore_cache "$IPSW_PATH_LATEST" "$fr_cache" || true
     # Proven A13 tethered path: live liter8 Recovery + Odysseus flags + external rdsk/rkrn.
     # Do NOT pass plain stock FR against a hybrid 26.x archive — that is the
     # "Unable to place device into restore mode" failure mode from beta22 logs.
@@ -3653,6 +3834,7 @@ if [[ $VERSION == 16.4 ]]; then
     printf '  %q' "$fr_bin"
     printf ' %q' "${fr_args[@]}"
     printf '\n'
+    echo "iOS 16.4 FR cache (TMPDIR): $fr_cache"
 else
     fr_args=(-t "$SHSH_PATH" $rsep_flag --latest-sep $updatebb_flag "$restoredir/custom.ipsw")
 fi
@@ -3664,6 +3846,8 @@ while true; do
     }
     set +e
     if [[ $VERSION == 16.4 ]]; then
+        # Re-seed before every attempt so a purged cryptex cache is refilled from IPSW.
+        seed_ios164_futurerestore_cache "$IPSW_PATH_LATEST" "$fr_cache" || true
         sudo env \
             HOME="$HOME" \
             TMPDIR="$fr_cache" \
@@ -3683,6 +3867,21 @@ while true; do
             break
         fi
         echo "futurerestore segfaulted (exit 139), retrying..."
+        sleep 2
+        continue
+    fi
+    if [[ $VERSION == 16.4 ]] &&
+       { grep -Fq 'Could not download Cryptex1' "$attempt_log" ||
+         grep -Fq '[LFZP] failed to download file' "$attempt_log" ||
+         grep -Fq 'failed to download file (487)' "$attempt_log"; }; then
+        echo "Cryptex/CDN download failed (libfragmentzip). Purging partial cache and retrying from base IPSW seed..."
+        purge_ios164_partial_cryptex_cache "$fr_cache"
+        rm -f "$attempt_log"
+        if [[ $restore_attempt -ge $max_restore_attempts ]]; then
+            echo "Cryptex download kept failing after $restore_attempt attempts."
+            EXIT_CODE=1
+            break
+        fi
         sleep 2
         continue
     fi
@@ -3708,6 +3907,9 @@ else
     if [[ $VERSION == 16.4 ]]; then
         echo "iOS 16.4 tip: stay in post-iBSS Recovery (do not reboot) between liter8 and FR."
         echo "If NONC changed, re-pwn DFU and re-run Start Restore so a fresh ticket is minted."
+        echo "If you saw Cryptex/LFZP errors: wipe FR cache and re-seed from the base IPSW:"
+        echo "  sudo rm -rf \"\${TMPDIR:-/tmp}/surrealra1n-fr-cache-${IOS164_BASE_BUILD}\""
+        echo "  (or on Linux: sudo rm -rf /tmp/surrealra1n-fr-cache-23F84)"
         echo "Full log: $restore_log"
     fi
     exit 1
@@ -4198,14 +4400,15 @@ prepare_ios164_build_inputs(){
     local target_version target_build base_version base_build
     local img4_probe img4_output
 
-    [[ "$(uname -s)" == "Darwin" ]] || {
-        echo "iOS 16.4 beta builds currently require macOS."
-        exit 2
-    }
-    command -v hdiutil >/dev/null 2>&1 || {
-        echo "iOS 16.4 beta builds require hdiutil."
-        exit 2
-    }
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        command -v hdiutil >/dev/null 2>&1 || {
+            echo "iOS 16.4 beta builds require hdiutil on macOS."
+            exit 2
+        }
+    else
+        # Linux experimental: ramdisk patching uses linux-apfs-rw (see bin/patch_ios164_ramdisk.sh).
+        echo "Linux: experimental iOS 16.4 path (APFS ramdisk via linux-apfs-rw)."
+    fi
     [[ -f "$target_ipsw" ]] || { echo "Missing target IPSW: $target_ipsw"; exit 2; }
     [[ -f "$base_ipsw" ]] || { echo "Missing base IPSW: $base_ipsw"; exit 2; }
     case "$IDENTIFIER" in

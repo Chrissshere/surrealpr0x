@@ -22,17 +22,21 @@ Requirements:
   - `iPhone12,8` — iPhone SE (2nd generation)
 - `<target.ipsw>` must be the iOS 16.4 (20E247) IPSW for that identifier.
 - `<base.ipsw>` must be the iOS 26.5.2 (23F84) IPSW for that same identifier (carrier/SEP ticket source).
-- **Apple Silicon Mac required** for the 16.4 restore handoff (usbliter8 FR patches are arm64-only).
-- The builder requires macOS 10.15 or newer. Some helper tools still use Rosetta on Apple Silicon.
+- **macOS:** Apple Silicon for the 16.4 restore handoff (usbliter8 futurerestore patches are arm64-only).
+- **Linux:** experimental; uses stock futurerestore Build 329 and `linux-apfs-rw` for APFS ramdisk work. Load `linux-apfs-rw/apfs.ko` if needed.
+- Cryptex1/SEP for the restore phase are seeded from the local base IPSW when possible (avoids flaky multi‑GB CDN downloads).
 - If an archive includes helpers built on another Mac CPU, the builder rebuilds its iOS 16.4 helpers for the current host.
 
 The builder validates both IPSWs and resolves their matching erase identities
 before building. It produces a **target-based** custom IPSW (ProductVersion 16.4)
 plus Odysseus sidecars (`ramdisk.im4p`, `kernel.im4p`, patched iBSS/iBEC). At
-restore time, surrealra1n boots patched iBSS with liter8, then runs a
-usbliter8-patched futurerestore with `--use-pwndfu --no-ibss --skip-blob
---rdsk --rkrn --custom-latest-buildid 23F84`. Hybrid base (26.x) custom.ipsw
-archives from older betas are rejected and rebuilt automatically.
+restore time, surrealra1n boots patched iBSS with liter8, then runs futurerestore
+with `--use-pwndfu --no-ibss --skip-blob --rdsk --rkrn --custom-latest-buildid 23F84`.
+Hybrid base (26.x) custom.ipsw archives from older betas are rejected and rebuilt
+automatically.
+
+Release zips: `surrealpr0x-*-macos.zip` and `surrealpr0x-*-linux.zip` on the
+[releases](https://github.com/Chrissshere/surrealpr0x/releases) page.
 
 The bundled kernel patchfinder is from usbliter8ra1n and is available under its
 MIT license in [tools/LICENSE.usbliter8ra1n](tools/LICENSE.usbliter8ra1n).
