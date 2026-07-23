@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 24"
+CURRENT_VERSION="v2.0 beta 25"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -314,7 +314,8 @@ elif [[ $dist == 2 ]]; then
         echo "All dependencies are already installed."
     fi
 elif [[ $dist == 5 ]]; then
-    DEPENDENCIES=(libusb1-devel usbmuxd libimobiledevice-utils zenity git curl make gcc python3-pip python3-usb)
+    # Fedora/RHEL: the PyUSB package is python3-pyusb (not python3-usb).
+    DEPENDENCIES=(libusb1-devel usbmuxd libimobiledevice-utils zenity git curl make gcc python3-pip python3-pyusb)
     MISSING_PACKAGES=()
 
     for pkg in "${DEPENDENCIES[@]}"; do

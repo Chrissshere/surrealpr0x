@@ -1,9 +1,5 @@
-v2.0 beta 24
+v2.0 beta 25
 
 RELEASE NOTES:
 
-Cryptex1 downloads were dying mid-transfer on some networks (libfragmentzip / LFZP 487), especially on Linux, before the restore ever started. This build seeds Cryptex1 and SEP from the base 26.5.2 IPSW you already picked, so futurerestore does not have to pull a multi‑gig file from Apple’s CDN. Failed partial cache files are cleared and re-seeded on retry.
-
-Also ships a Linux package with APFS ramdisk support (linux-apfs-rw) alongside the usual macOS build. Same experimental iOS 16.4 Odysseus path as beta 23.
-
-macOS still wants Apple Silicon for the patched futurerestore path. Linux uses stock Build 329 for now — stay in Recovery after liter8, and wipe /tmp/surrealra1n-fr-cache-23F84 if an old broken cryptex cache is still around.
+Fedora: install python3-pyusb instead of the non-existent python3-usb package so dependency setup does not crash on dnf.
