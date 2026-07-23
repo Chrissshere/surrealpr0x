@@ -3,6 +3,7 @@ bin/*
 !bin/patch_ios164_kernel.py
 !bin/patch_ios164_ramdisk.sh
 !bin/inspect_ios164_manifest.py
+!bin/liter8ctl
 .DS_Store
 .venv/
 __pycache__/

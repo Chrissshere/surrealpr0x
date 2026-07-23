@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 26"
+CURRENT_VERSION="v2.0 beta 27"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -2335,6 +2335,44 @@ print("iOS 16.4 archive is target-based (16.4/20E247) with valid kernel paths.")
 PY
 }
 
+# usbliter8ctl is shipped in-tree (upstream GitHub repo was removed / 404s).
+# Prefer tools/liter8ctl; keep a working copy at bin/liter8ctl for callers.
+ensure_liter8ctl(){
+    local want_hash="30f0cccee9ac359ac0bee11e165f8bd3f23849c913f4b5a8c4fc0ee3be7377b3"
+    local bundled="$SCRIPT_DIR/tools/liter8ctl"
+    local dest="$SCRIPT_DIR/bin/liter8ctl"
+    local got_hash=""
+
+    mkdir -p "$SCRIPT_DIR/bin"
+    if [[ -s "$bundled" ]]; then
+        cp "$bundled" "$dest"
+    elif [[ -s "$dest" ]]; then
+        echo "Using existing bin/liter8ctl (bundled tools/liter8ctl missing)."
+    else
+        echo "FATAL: bundled liter8ctl is missing."
+        echo "Expected: $bundled"
+        echo "The old prdgmshift/usbliter8 GitHub download is gone (404)."
+        return 1
+    fi
+    chmod +x "$dest" 2>/dev/null || true
+
+    if command -v shasum >/dev/null 2>&1; then
+        got_hash=$(shasum -a 256 "$dest" | awk '{print $1}')
+    elif command -v sha256sum >/dev/null 2>&1; then
+        got_hash=$(sha256sum "$dest" | awk '{print $1}')
+    else
+        echo "WARNING: no sha256 tool; skipping liter8ctl checksum verify."
+        return 0
+    fi
+    if [[ "$got_hash" != "$want_hash" ]]; then
+        echo "FATAL: liter8ctl checksum mismatch."
+        echo "  got:  $got_hash"
+        echo "  want: $want_hash"
+        return 1
+    fi
+    return 0
+}
+
 ensure_ios164_futurerestore(){
 
     local stock_bin="$SCRIPT_DIR/futurerestore/futurerestore"
@@ -3194,8 +3232,7 @@ sleep 5
 
 echo "Sending iBSS"
 if [[ $IDENTIFIER == iPhone11* || $IDENTIFIER == iPhone12* || $IDENTIFIER == iPad11* ]]; then
-    curl -L -o bin/liter8ctl https://github.com/prdgmshift/usbliter8/raw/refs/heads/main/usbliter8ctl
-    chmod +x bin/liter8ctl 2>/dev/null || true
+    ensure_liter8ctl || exit 1
     if [[ -z "${LITER8_PYTHON:-}" ]]; then
         LITER8_PYTHON="python3"
         [[ -x "$SCRIPT_DIR/.venv/bin/python" ]] && LITER8_PYTHON="$SCRIPT_DIR/.venv/bin/python"
@@ -3733,26 +3770,7 @@ if [[ $VERSION == 16.4 ]]; then
         exit 1
     }
 fi
-local liter8ctl_hash="30f0cccee9ac359ac0bee11e165f8bd3f23849c913f4b5a8c4fc0ee3be7377b3"
-curl --fail --location --retry 2 -o bin/liter8ctl \
-    https://raw.githubusercontent.com/prdgmshift/usbliter8/afe8b5c8998fce63e76c0b2a88c606c61e2950c7/usbliter8ctl || {
-    echo "FATAL: could not download the pinned liter8ctl dependency."
-    exit 1
-}
-local downloaded_liter8ctl_hash
-if command -v shasum >/dev/null 2>&1; then
-    downloaded_liter8ctl_hash=$(shasum -a 256 bin/liter8ctl | awk '{print $1}')
-elif command -v sha256sum >/dev/null 2>&1; then
-    downloaded_liter8ctl_hash=$(sha256sum bin/liter8ctl | awk '{print $1}')
-else
-    echo "FATAL: a SHA-256 tool is required to verify liter8ctl."
-    exit 1
-fi
-[[ "$downloaded_liter8ctl_hash" == "$liter8ctl_hash" ]] || {
-    echo "FATAL: downloaded liter8ctl did not match the pinned checksum."
-    exit 1
-}
-chmod +x bin/liter8ctl 2>/dev/null || true
+ensure_liter8ctl || exit 1
 # pyusb is required before booting.
 if [[ -z "${LITER8_PYTHON:-}" ]]; then
     LITER8_PYTHON="python3"

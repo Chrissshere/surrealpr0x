@@ -1,5 +1,5 @@
-v2.0 beta 26
+v2.0 beta 27
 
 RELEASE NOTES:
 
-Fix iOS 16.4 build validation looking for ramdisk.im4p / kernel.im4p / patched iBSS-iBEC in the current directory instead of restorefiles/<device>/16.4. That false FATAL blocked a successful 11 Pro (and other) build right after the IPSW checks passed.
+Ship liter8ctl/usbliter8ctl inside the tree. The prdgmshift/usbliter8 GitHub repo is gone (404), so restores no longer try to curl it at runtime.
