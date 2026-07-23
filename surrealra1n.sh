@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 25"
+CURRENT_VERSION="v2.0 beta 26"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -2229,6 +2229,9 @@ validate_ios164_archive_boot_components(){
     local custom_ipsw="$1"
     # Second arg is kept for callers; Odysseus path validates against the 16.4 target IPSW.
     local _unused_base_ipsw="${2:-}"
+    # Optional explicit dir for Odysseus sidecars (ramdisk.im4p, etc.). Required when
+    # custom.ipsw is still in cwd as "custom.ipsw" during the build (dirname == ".").
+    local artifact_dir="${3:-}"
     local reference_ipsw="${IPSW_PATH:-}"
     local ibss_member="${IOS164_TARGET_IBSS:-Firmware/dfu/$IBSS}"
     local ibec_member="${IOS164_TARGET_IBEC:-Firmware/dfu/$IBEC}"
@@ -2238,10 +2241,22 @@ validate_ios164_archive_boot_components(){
         return 1
     }
 
+    if [[ -z "$artifact_dir" ]]; then
+        if [[ -n "${restoredir:-}" && -d "${restoredir:-}" ]]; then
+            artifact_dir="$restoredir"
+        else
+            artifact_dir=$(dirname "$custom_ipsw")
+        fi
+    fi
+    # Never treat bare cwd as the artifact dir when we know restoredir.
+    if [[ "$artifact_dir" == "." && -n "${restoredir:-}" && -d "$restoredir" ]]; then
+        artifact_dir="$restoredir"
+    fi
+
     validate_ios164_archive_component "$custom_ipsw" "$reference_ipsw" "$ibss_member" iBSS || return 1
     validate_ios164_archive_component "$custom_ipsw" "$reference_ipsw" "$ibec_member" iBEC || return 1
     validate_ios164_archive_kernel_entries "$custom_ipsw" || return 1
-    validate_ios164_odysseus_artifacts "$(dirname "$custom_ipsw")"
+    validate_ios164_odysseus_artifacts "$artifact_dir"
 }
 
 validate_ios164_odysseus_artifacts(){
@@ -2756,7 +2771,7 @@ make_custom_ipsw_ios164(){
         cd tmp1
         zip -0 -r ../custom.ipsw ./*
     )
-    validate_ios164_archive_boot_components custom.ipsw "$IPSW_PATH_LATEST" || {
+    validate_ios164_archive_boot_components custom.ipsw "$IPSW_PATH_LATEST" "$restoredir" || {
         rm -f custom.ipsw
         rm -rf tmp1 tmp2 work
         exit 1
@@ -3142,7 +3157,7 @@ cd tmp2
 zip -0 -r ../custom.ipsw *
 cd ..
 if [[ $VERSION == 16.4 ]]; then
-    validate_ios164_archive_boot_components custom.ipsw "$IPSW_PATH_LATEST" || {
+    validate_ios164_archive_boot_components custom.ipsw "$IPSW_PATH_LATEST" "$restoredir" || {
         rm -f custom.ipsw
         rm -rf tmp1 tmp2 work
         exit 1

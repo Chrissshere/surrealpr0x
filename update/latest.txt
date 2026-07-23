@@ -1,5 +1,5 @@
-v2.0 beta 25
+v2.0 beta 26
 
 RELEASE NOTES:
 
-Fedora: install python3-pyusb instead of the non-existent python3-usb package so dependency setup does not crash on dnf.
+Fix iOS 16.4 build validation looking for ramdisk.im4p / kernel.im4p / patched iBSS-iBEC in the current directory instead of restorefiles/<device>/16.4. That false FATAL blocked a successful 11 Pro (and other) build right after the IPSW checks passed.
