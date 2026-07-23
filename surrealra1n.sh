@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 28"
+CURRENT_VERSION="v2.0 beta 29"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -4428,13 +4428,42 @@ verify_ios164_host_tools(){
     [[ "$(uname -m)" == "x86_64" ]] || return 0
     command -v file >/dev/null 2>&1 || return 0
     for tool in "$@"; do
+        # Skip missing optional tools (caller decides).
+        [[ -e "$tool" ]] || continue
         tool_info=$(file -b "$tool" 2>/dev/null || true)
-        [[ "$tool_info" == *x86_64* ]] || {
+        # Linux `file` prints "x86-64"; macOS prints "x86_64".
+        [[ "$tool_info" == *x86_64* || "$tool_info" == *x86-64* ]] || {
             echo "iOS 16.4 helper is not Intel-compatible: $tool"
+            echo "  file: $tool_info"
             echo "Use a clean source checkout so the Intel bootstrap can rebuild its generated tools."
             return 1
         }
     done
+}
+
+# tools/img4-ios164 is a macOS Mach-O helper. On Linux use the ELF bin/img4 from Semaphorin.
+select_ios164_img4(){
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        IOS164_IMG4="$SCRIPT_DIR/tools/img4-ios164"
+        [[ -x "$IOS164_IMG4" ]] || {
+            echo "FATAL: missing macOS iOS 16.4 img4 helper: $IOS164_IMG4"
+            return 1
+        }
+    else
+        IOS164_IMG4="$SCRIPT_DIR/bin/img4"
+        [[ -x "$IOS164_IMG4" ]] || {
+            echo "FATAL: missing Linux img4 helper: $IOS164_IMG4"
+            echo "Run surrealra1n once so Linux binaries are downloaded into bin/."
+            return 1
+        }
+        # Refuse to try the Mach-O bundle on Linux (fails with "cannot execute binary file").
+        if file -b "$IOS164_IMG4" 2>/dev/null | grep -qi 'Mach-O'; then
+            echo "FATAL: bin/img4 is a macOS binary on a Linux host."
+            return 1
+        fi
+        echo "Linux: using $IOS164_IMG4 for iOS 16.4 img4 work (tools/img4-ios164 is macOS-only)."
+    fi
+    return 0
 }
 
 prepare_ios164_build_inputs(){
@@ -4444,6 +4473,7 @@ prepare_ios164_build_inputs(){
     local target_values base_values
     local target_version target_build base_version base_build
     local img4_probe img4_output
+    local -a ios164_tools=()
 
     if [[ "$(uname -s)" == "Darwin" ]]; then
         command -v hdiutil >/dev/null 2>&1 || {
@@ -4464,30 +4494,30 @@ prepare_ios164_build_inputs(){
             ;;
     esac
 
-    fix_ios164_tool_permissions \
-        "$SCRIPT_DIR/tools/img4-ios164" \
-        "$SCRIPT_DIR/bin/iBootPatch" \
-        "$SCRIPT_DIR/bin/iBootpatch2" \
-        "$SCRIPT_DIR/bin/Kernel64Patcher3" \
-        "$SCRIPT_DIR/bin/asr64_patcher" \
-        "$SCRIPT_DIR/bin/libimg4_patcher" \
-        "$SCRIPT_DIR/bin/ldid" \
-        "$SCRIPT_DIR/bin/trustcache" \
-        "$SCRIPT_DIR/bin/kerneldiff" \
-        "$SCRIPT_DIR/bin/img4" \
-        "$SCRIPT_DIR/bin/patch_ios164_kernel.py" \
+    select_ios164_img4 || exit 2
+
+    ios164_tools=(
+        "$IOS164_IMG4"
+        "$SCRIPT_DIR/bin/iBootPatch"
+        "$SCRIPT_DIR/bin/iBootpatch2"
+        "$SCRIPT_DIR/bin/Kernel64Patcher3"
+        "$SCRIPT_DIR/bin/asr64_patcher"
+        "$SCRIPT_DIR/bin/libimg4_patcher"
+        "$SCRIPT_DIR/bin/ldid"
+        "$SCRIPT_DIR/bin/trustcache"
+        "$SCRIPT_DIR/bin/kerneldiff"
+        "$SCRIPT_DIR/bin/img4"
+        "$SCRIPT_DIR/bin/patch_ios164_kernel.py"
         "$SCRIPT_DIR/bin/patch_ios164_ramdisk.sh"
-    verify_ios164_host_tools \
-        "$SCRIPT_DIR/tools/img4-ios164" \
-        "$SCRIPT_DIR/bin/iBootPatch" \
-        "$SCRIPT_DIR/bin/iBootpatch2" \
-        "$SCRIPT_DIR/bin/Kernel64Patcher3" \
-        "$SCRIPT_DIR/bin/asr64_patcher" \
-        "$SCRIPT_DIR/bin/libimg4_patcher" \
-        "$SCRIPT_DIR/bin/ldid" \
-        "$SCRIPT_DIR/bin/trustcache" \
-        "$SCRIPT_DIR/bin/kerneldiff" \
-        "$SCRIPT_DIR/bin/img4" || exit 2
+        "$SCRIPT_DIR/bin/patch_ios164_restored_external.py"
+    )
+    # macOS also keeps the dedicated iOS 16 img4 bundle for Intel rebuild checks.
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        ios164_tools+=("$SCRIPT_DIR/tools/img4-ios164")
+    fi
+
+    fix_ios164_tool_permissions "${ios164_tools[@]}"
+    verify_ios164_host_tools "${ios164_tools[@]}" || exit 2
     [[ -f "$SCRIPT_DIR/tools/kernel_patchfinder.py" ]] || {
         echo "Missing required iOS 16.4 patchfinder: $SCRIPT_DIR/tools/kernel_patchfinder.py"
         exit 2
@@ -4544,7 +4574,6 @@ prepare_ios164_build_inputs(){
         exit 2
     }
 
-    IOS164_IMG4="$SCRIPT_DIR/tools/img4-ios164"
     img4_probe=$(mktemp /tmp/surreal-ios164-kernel.XXXXXX)
     img4_output=$(mktemp /tmp/surreal-ios164-kernel-output.XXXXXX)
     unzip -p "$target_ipsw" "$IOS164_TARGET_KERNEL" >"$img4_probe" || {
@@ -4554,7 +4583,12 @@ prepare_ios164_build_inputs(){
     }
     if ! "$IOS164_IMG4" -i "$img4_probe" -o "$img4_output" >/dev/null 2>&1 || [[ ! -s "$img4_output" ]]; then
         rm -f "$img4_probe" "$img4_output"
-        echo "The bundled iOS 16.4 img4 tool could not extract the target kernel."
+        echo "The iOS 16.4 img4 tool could not extract the target kernel."
+        echo "  tool: $IOS164_IMG4"
+        echo "  file: $(file -b "$IOS164_IMG4" 2>/dev/null || echo unknown)"
+        if [[ "$(uname -s)" != "Darwin" ]]; then
+            echo "  On Linux, bin/img4 must be the ELF helper (not tools/img4-ios164, which is macOS-only)."
+        fi
         exit 2
     fi
     rm -f "$img4_probe" "$img4_output"
