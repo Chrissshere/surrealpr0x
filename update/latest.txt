@@ -1,5 +1,5 @@
-v2.0 beta 27
+v2.0 beta 28
 
 RELEASE NOTES:
 
-Ship liter8ctl/usbliter8ctl inside the tree. The prdgmshift/usbliter8 GitHub repo is gone (404), so restores no longer try to curl it at runtime.
+iOS 16.4 restore chain now follows the Spironolactone / downgrade12,3 11 Pro lab recipe (Option D): asr + libimg4 evaluate bypass + restored_external seal_system_volume skip, with all three CDHashes injected into RestoreTrustCache. Restore-entry --rkrn is the stock 16.4 kernel retagged rkrn (lab Boot-Bar style) instead of the heavy AMFI-patched kernel that fell back logo→Recovery. Rebuild restore files after updating.

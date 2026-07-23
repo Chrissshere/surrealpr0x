@@ -4,6 +4,7 @@ bin/*
 !bin/patch_ios164_ramdisk.sh
 !bin/inspect_ios164_manifest.py
 !bin/liter8ctl
+!bin/patch_ios164_restored_external.py
 .DS_Store
 .venv/
 __pycache__/

@@ -1,5 +1,5 @@
 #!/bin/bash
-CURRENT_VERSION="v2.0 beta 27"
+CURRENT_VERSION="v2.0 beta 28"
 UPDATE_REPOSITORY_URL="https://github.com/Chrissshere/surrealpr0x"
 UPDATE_BRANCH="ios164-beta"
 
@@ -2765,44 +2765,55 @@ make_custom_ipsw_ios164(){
     fi
     echo "iOS 16.4: leaving stock target iBSS/iBEC inside custom.ipsw (Odysseus uses staged patched copies)."
 
-    echo "Patching iOS 16.4 kernel..."
+    echo "Patching iOS 16.4 kernel (NAND krnl only)..."
     "$IOS164_IMG4" -i "tmp1/$IOS164_TARGET_KERNEL" -o work/kernel.raw
     "$python_bin" ./bin/patch_ios164_kernel.py \
         work/kernel.raw work/kernelboot.patch \
         --kernel64-patcher ./bin/Kernel64Patcher3
     ./bin/kerneldiff work/kernel.raw work/kernelboot.patch work/kernelboot.diff
-    # Build krnl (NAND flash) and rkrn (restore entry) from the stock im4p + same diff.
+    # NAND KernelCache: full 16.4 patch set (for post-restore tether boot experiments).
     "$IOS164_IMG4" -i "tmp1/$IOS164_TARGET_KERNEL" -o work/kernel.krnl.im4p \
         -T krnl -J -P work/kernelboot.diff
-    "$IOS164_IMG4" -i "tmp1/$IOS164_TARGET_KERNEL" -o work/kernel.rkrn.im4p \
-        -T rkrn -J -P work/kernelboot.diff
+    # --rkrn restore entry: STOCK 16.4 kernel retagged rkrn (lab Boot-Bar style).
+    # Heavy AMFI patches here made restore mode fall back logo→Recovery (30MB custom rkrn).
+    "$IOS164_IMG4" -i "tmp1/$IOS164_TARGET_KERNEL" -o work/kernel.rkrn.im4p -T rkrn -J
     [[ -s work/kernel.krnl.im4p && -s work/kernel.rkrn.im4p ]] || {
-        echo "FATAL: failed to repack patched iOS 16.4 kernels"
+        echo "FATAL: failed to repack iOS 16.4 kernels"
         exit 1
     }
     cp work/kernel.krnl.im4p "tmp1/$IOS164_TARGET_KERNEL"
     cp work/kernel.rkrn.im4p "$restoredir/kernel.im4p"
+    echo "iOS 16.4: --rkrn is stock kernel (lab restore-entry); IPSW KernelCache is patched."
 
-    echo "Patching iOS 16.4 restore ramdisk (asr + libimg4 + trustcache)..."
+    echo "Patching iOS 16.4 restore ramdisk (lab Option D: asr + libimg4 + restored_external seal)..."
     ./bin/patch_ios164_ramdisk.sh \
         "$restore_ramdisk_dmg" work/ramdisk.raw work \
         "$IOS164_IMG4" ./bin/asr64_patcher ./bin/libimg4_patcher ./bin/ldid
-    [[ -s work/asr_patched && -s work/libimg4.patch ]] || {
-        echo "FATAL: iOS 16.4 trust-cache inputs are missing"
+    [[ -s work/asr_patched && -s work/libimg4.patch && -s work/restored_external.patched ]] || {
+        echo "FATAL: iOS 16.4 lab trust-cache inputs are missing (asr/libimg4/restored_external)"
         exit 1
     }
     "$IOS164_IMG4" -i "$target_trustcache_path" -o work/trustcache.raw || exit 1
     cp work/trustcache.raw work/trustcache.stock.raw
+    # Lab: inject CDHashes for every re-signed ramdisk binary AMFI will execute.
     ./bin/trustcache append work/trustcache.raw work/asr_patched || exit 1
     ./bin/trustcache append work/trustcache.raw work/libimg4.patch || exit 1
+    ./bin/trustcache append work/trustcache.raw work/restored_external.patched || exit 1
     "$IOS164_IMG4" -i work/trustcache.raw -o "$target_trustcache_path" -A -T rtsc || exit 1
     [[ -s work/trustcache.raw && -s "$target_trustcache_path" ]] &&
     ! cmp -s work/trustcache.stock.raw work/trustcache.raw || {
         echo "FATAL: iOS 16.4 RestoreTrustCache injection failed"
         exit 1
     }
+    stock_tc_size=$(wc -c < work/trustcache.stock.raw | tr -d ' ')
+    new_tc_size=$(wc -c < work/trustcache.raw | tr -d ' ')
+    echo "RestoreTrustCache grew ${stock_tc_size} → ${new_tc_size} bytes (lab CDHash inject)"
     "$IOS164_IMG4" -i work/ramdisk.raw -o "$restore_ramdisk_dmg" -A -T rdsk
     cp "$restore_ramdisk_dmg" "$restoredir/ramdisk.im4p"
+    # Keep lab sidecars next to the bundle for offline inspection.
+    cp work/restored_external.patched "$restoredir/restored_external.patched" 2>/dev/null || true
+    cp work/asr_patched "$restoredir/asr_patched" 2>/dev/null || true
+    cp work/libimg4.patch "$restoredir/libimg4.patch" 2>/dev/null || true
 
     echo "Packing target-based custom.ipsw (ProductVersion 16.4)..."
     (
